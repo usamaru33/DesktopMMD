@@ -38,3 +38,6 @@ release/
 .vscode/
 Thumbs.db
 desktop.ini
+
+# Local deny-list for scripts/sync-public.ps1
+.sync-deny.txt

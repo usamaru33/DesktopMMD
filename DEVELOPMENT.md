@@ -124,3 +124,14 @@ python scripts/make-icon.py  # アイコン（build/icon.ico）を作り直す�
 ## 今後の予定（メモ）
 
 - 好みの配布モーション（VMD）を標準にしたい場合は、配布条件を確かめ、`THIRD_PARTY_NOTICES.md` に記載してから `defaultMotions.ts` の生成に代えて同梱する。
+
+## 公開用リポジトリへの反映
+
+開発は DesktopMMD-dev（非公開）で行い、公開する内容は `scripts/sync-public.ps1` で DesktopMMD-public に反映する（履歴は引き継がず、差分を1コミットで積む）。
+
+```powershell
+.\scripts\sync-public.ps1 -Message "v0.2.3: 変更の要約" [-Push]
+```
+
+- 反映されるのはコミット済みの内容だけ。
+- gitleaks（PATH 上）で秘密情報を、`.sync-deny.txt`（git管理外、1行1つの正規表現）で公開したくない文字列を検査し、見つかればコミットしない。
