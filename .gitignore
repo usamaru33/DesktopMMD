@@ -1,0 +1,40 @@
+node_modules/
+out/
+dist/
+coverage/
+*.log
+sidecar/.venv/
+sidecar/__pycache__/
+sidecar/**/__pycache__/
+sidecar/dist/
+sidecar/build/
+src/renderer/public/ammo.wasm.*
+# Models and motions are never committed (model license forbids redistribution)
+*.pmx
+*.pmd
+*.vmd
+*.x
+# characters/: only the skill template and the sample are tracked (never models, textures or motions)
+characters/*
+!characters/_template/
+!characters/sample/
+characters/*/*
+!characters/*/skill.md
+build/README.html
+
+# Secrets and local settings
+.env
+.env.*
+# Other MMD assets and generated audio
+*.vpd
+*.wav
+# Installers and release output
+*.exe
+release/
+# Model caches
+*.onnx
+*.safetensors
+# IDE / OS
+.vscode/
+Thumbs.db
+desktop.ini

@@ -1,0 +1,50 @@
+# Installer (spec 2.2: electron-builder NSIS). The MMD model is NEVER bundled (model terms forbid redistribution);
+# users pick their own PMX in the setup screen.
+appId: dev.usamaru33.desktopmmd
+productName: DesktopMMD
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+  - package.json
+  - '!**/*.pmx'
+  - '!**/*.pmd'
+  - '!**/*.vmd'
+extraResources:
+  # skill.md のテンプレートとサンプル（管理画面の「skill.md を作る」で使う）
+  - from: characters/_template/skill.md
+    to: characters/_template/skill.md
+  - from: characters/sample/skill.md
+    to: characters/sample/skill.md
+  # PyInstaller one-folder build of the sidecar (npm run sidecar:build)
+  - from: sidecar/dist/sidecar
+    to: sidecar
+    filter: ['**/*']
+# the user guide sits next to DesktopMMD.exe in the install folder
+extraFiles:
+  - from: README.md
+    to: README.md
+  - from: build/README.html
+    to: README.html
+asarUnpack:
+  - node_modules/uiohook-napi/**
+  - node_modules/get-windows/**
+win:
+  target: nsis
+  icon: build/icon.ico
+  artifactName: DesktopMMD-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: false
+  installerLanguages: [ja_JP]
+  language: '1041'
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  # user data in %APPDATA%\mmd-assistant (memories, settings, API key) is kept on uninstall
+  deleteAppDataOnUninstall: false
+  # アンインストール時に自動起動の登録を消す
+  include: build/installer.nsh
+npmRebuild: false

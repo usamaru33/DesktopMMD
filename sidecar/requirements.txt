@@ -1,0 +1,10 @@
+faster-whisper>=1.2
+onnxruntime>=1.20
+tokenizers>=0.20
+huggingface_hub>=0.25
+websockets>=14
+numpy>=1.26
+pytest>=8
+# GPU (optional): CTranslate2's Whisper on CUDA 12 only loads cuBLAS (verified: no cuDNN/NVRTC needed).
+# stt.py adds the DLL folder at runtime.
+nvidia-cublas-cu12; sys_platform == "win32"
