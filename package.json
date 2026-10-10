@@ -55,5 +55,8 @@
     "typescript": "^7.0.2",
     "vite": "^7.3.7",
     "vitest": "^5.0.3"
+  },
+  "overrides": {
+    "tar": "^7.5.21"
   }
 }
