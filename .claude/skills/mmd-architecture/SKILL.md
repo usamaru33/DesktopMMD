@@ -62,6 +62,7 @@ DesktopMMD/
 | --- | --- | --- |
 | Orchestrator | main/orchestrator/Orchestrator.ts | すべてのmainサービス（インターフェース越し） |
 | LlmClient | main/llm/LlmClient.ts | @anthropic-ai/sdk、usage |
+| OllamaClient / RoutingLlm | main/llm/LocalLlm.ts | fetch（Ollama の /api/chat）。`LlmAdapter` の3つ目の実装。RoutingLlm が会話を設定で振り分ける |
 | PromptBuilder | main/llm/PromptBuilder.ts | 純粋関数。入力はプレーンなデータのみ |
 | ReplyParser | main/llm/ReplyParser.ts | 純粋。I/Oなし（`mmd-reply-protocol`） |
 | ToolRegistry / PermissionGate | main/tools/* | pathGuard, Store |
@@ -100,7 +101,7 @@ DesktopMMD/
 | プロンプト構成 | ①〜⑦を毎回system | ①〜⑤をセッション内固定のsystem、⑥⑦は毎ターン追記するmid-conversation systemメッセージ | Sonnet 5.5のpreserved thinking: systemやtools・過去の履歴を書き換えると以前のthinkingブロックが無効（新規アカウントは400） |
 | VAD | Silero VAD | Silero VAD（onnx、faster-whisper同梱のモデルをonnxruntimeで直接ストリーミング実行） | torch不要で軽い |
 | 埋め込み | multilingual-e5-small | 同（ONNX版をonnxruntime + tokenizersで実行） | torch不要。出力384次元は同じ |
-| 会話モデル | claude-sonnet-5-5 | 同 | 仕様どおり。thinkingは無効化できないので effort で速さを調整（`mmd-reply-protocol`） |
+| 会話モデル | claude-sonnet-5-5 | 同。ただし設定で「このPCのAI（Ollama）」も選べる | thinkingは無効化できないので effort で速さを調整（`mmd-reply-protocol`）。ローカルは既定で会話のみ（ツール・Web検索なし）。実験的トグルでツールも可（承認文言を外し、依頼のときだけ思考オン: 約6→約13/14）。14BはVRAM 12GBで溢れて約7 tok/s のため、8B級まで（`llm/LocalLlm.ts`、`Orchestrator` の `chatOnly`） |
 
 ## 6. コーディング規約
 

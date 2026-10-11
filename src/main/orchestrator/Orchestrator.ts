@@ -40,6 +40,10 @@ export interface OrchestratorDeps {
   memory: MemoryPortForTurns;
   activeApp(): string | null;
   webSearchEnabled(): boolean;
+  /** true: 会話だけのセッションにする（ローカルAI）。ツールもWeb検索も渡さない */
+  chatOnly?(): boolean;
+  /** false: ツールの説明やプロンプトに「承認が必要」と書かない（ローカルの小型モデル向け。承認はアプリが必ず取る） */
+  approvalHint?(): boolean;
   now(): Date;
   log: Logger;
   onLatency?(r: { turnId: number; source: string; speechEnd?: number; transcript?: number; firstToken?: number; firstSentence?: number; firstAudio?: number }): void;
@@ -57,6 +61,7 @@ interface ActiveTurn {
 const SORRY_NETWORK = '[troubled:0.7] ごめんなさい、うまくつながらないみたいです。少し時間をおいてもう一度お願いします。';
 const SORRY_NO_KEY = '[troubled:0.6] まだAPIキーが設定されていないので、お返事ができません。設定画面から登録してくださいね。';
 const SORRY_REFUSAL = '[troubled:0.6] ごめんなさい、そのお話にはお答えできないんです。';
+const SORRY_LOCAL = '[troubled:0.7] ローカルのAIから返事がありません。Ollamaが起動していて、モデルが入っているか、設定画面で確認してもらえますか？';
 const SORRY_AUTH = '[troubled:0.7] APIキーが正しくないみたいです。設定画面で確認してもらえますか？';
 
 export class Orchestrator {
@@ -187,8 +192,10 @@ export class Orchestrator {
     if (s) this.d.memory.onTurnFinished(s.dbId); // let the extractor pick the old one up
     const settings = this.d.settings();
     const dbSession = this.d.store.conv.createSession(now);
-    const tools: BetaTool[] = [...this.d.tools.toClaudeTools()];
-    if (this.d.webSearchEnabled()) tools.push({ type: 'web_search_20260209', name: 'web_search', max_uses: LIMITS.webSearchPerReply });
+    const chatOnly = this.d.chatOnly?.() ?? false;
+    const approvalHint = this.d.approvalHint?.() ?? true;
+    const tools: BetaTool[] = chatOnly ? [] : [...this.d.tools.toClaudeTools({ approvalHint })];
+    if (!chatOnly && this.d.webSearchEnabled()) tools.push({ type: 'web_search_20260209', name: 'web_search', max_uses: LIMITS.webSearchPerReply });
     const skill = this.d.skill?.() ?? null;
     this.sessionSkill = skill;
     const system = buildSessionSystem({
@@ -199,7 +206,9 @@ export class Orchestrator {
       profile: this.d.memory.profile(),
       allowedDirs: settings.tools.allowedDirs,
       apps: settings.tools.apps.map((a) => a.name),
-      webSearch: this.d.webSearchEnabled(),
+      webSearch: !chatOnly && this.d.webSearchEnabled(),
+      tools: !chatOnly,
+      approvalNote: approvalHint,
     });
     this.session = new ConversationSession({ dbId: dbSession.id, system, tools, startedAt: now });
     this.lastToolSummary = null;
@@ -313,7 +322,7 @@ export class Orchestrator {
           emit(parser.end());
           const reason = e instanceof LlmUnavailableError ? e.reason : 'network';
           this.d.log.warn(`llm error: ${reason}`, e);
-          const sorry = reason === 'no_key' ? SORRY_NO_KEY : reason === 'auth' ? SORRY_AUTH : SORRY_NETWORK;
+          const sorry = reason === 'no_key' ? SORRY_NO_KEY : reason === 'auth' ? SORRY_AUTH : reason === 'local_down' ? SORRY_LOCAL : SORRY_NETWORK;
           this.speakFixed(turn, sorry);
           rawParts.push(sorry);
           session.appendAssistant([{ type: 'text', text: turn.spoken.join('') || sorry }]);

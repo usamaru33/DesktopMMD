@@ -68,12 +68,12 @@ function App() {
         ))}
       </nav>
       <main class="content">
-        {page === 'settings' && <SettingsPage />}
+        {page === 'settings' && <SettingsPage navigate={go} />}
         {page === 'voice' && <VoicePage setDirty={setDirty} />}
         {page === 'memory' && <MemoryPage />}
         {page === 'history' && <HistoryPage />}
         {page === 'tools' && <ToolsPage />}
-        {page === 'setup' && <SetupPage onDone={() => go('settings')} />}
+        {page === 'setup' && <SetupPage onDone={() => go('settings')} navigate={go} />}
       </main>
       <FlashHost />
     </div>

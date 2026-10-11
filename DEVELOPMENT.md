@@ -17,7 +17,7 @@
 
 - Windows 10/11（64bit）、Node.js 22以上、Python 3.11以上
 - [VOICEVOX](https://voicevox.hiroshiba.jp/)
-- Claude APIキー（無くても `npm run dev:fake` で疑似LLMで動かせます）
+- Claude APIキー（無くても `npm run dev:fake` で疑似LLMで動かせます。ローカルAIを試すなら [Ollama](https://ollama.com/) と `ollama pull qwen3:8b`）
 - テスト用のMMDモデル（PMX）。リポジトリには入れないこと（`*.pmx` は .gitignore 済み）
 
 ## セットアップと起動
@@ -40,6 +40,7 @@ npm run test:sidecar         # サイドカー（VAD・Whisper・埋め込み）
 npm run coverage
 npm run latency-report       # 応答遅延の中央値
 npm run eval:llm -- --yes    # 実APIでの評価（費用がかかる）
+npx tsx --tsconfig tsconfig.node.json scripts/eval-local.ts --runs 3   # Ollama での同じ評価（無料。形式・ツール選択・インジェクション・速度）
 ```
 
 ## キャラクタースキル
@@ -68,12 +69,21 @@ npm run eval:llm -- --yes    # 実APIでの評価（費用がかかる）
 
 ## 声の質（音高の上限・感情スタイル・音質フィルター・AivisSpeech）
 
-- 音高の上限: `src/main/speech/pitchShape.ts`。VOICEVOX では pitchScale / intonationScale と疑問文の語尾上げをエンジンに任せず、同じ計算（ENGINE の `_apply_interrogative_upspeak` → `_apply_pitch_scale` → `_apply_intonation_scale`）をモーラの高さにかけてから、文の本来の音域（抑揚1.0のときの最高・最低モーラ）から上0.5〜2半音・下1.5〜3.5半音で tanh で頭打ちにする。結果は pitchScale=0 / intonationScale=1 で、合成は `enable_interrogative_upspeak=false` で呼ぶ（`VoicevoxClient.synthesis(…, upspeak=false)`）。範囲内は ENGINE と同じ値になる（`tests/unit/voiceQuality.test.ts`）。自動調声の合成も同じ経路を通す。
+- 音高の上限: `src/main/speech/pitchShape.ts`。VOICEVOX では pitchScale / intonationScale と疑問文の語尾上げをエンジンに任せず、同じ計算（ENGINE の `_apply_interrogative_upspeak` → `_apply_pitch_scale` → `_apply_intonation_scale`）をモーラの高さにかけてから、文の本来の音域（抑揚1.0のときの最高・最低モーラ）から上0.5〜2半音・下1.5〜3.5半音で tanh で頭打ちにする。さらに、感情の音高補正で文全体が持ち上がっても、基本の音高（`voice.base.pitchScale`）で動かした本来の最高音から上1.5〜3半音までに頭打ちにする（`ABSOLUTE_UP_LIMIT`、`shapePitch` の第3引数）。結果は pitchScale=0 / intonationScale=1 で、合成は `enable_interrogative_upspeak=false` で呼ぶ（`VoicevoxClient.synthesis(…, upspeak=false)`）。範囲内は ENGINE と同じ値になる（`tests/unit/voiceQuality.test.ts`）。自動調声の合成も同じ経路を通す。
 - 実測（満別花丸ぶりっ子、抑揚1.82）: モーラの高さの頭打ちは効くが、合成音のF0の98パーセンタイルはほとんど変わらない（ボコーダが目標より上振れするため）。効果が大きいのは抑揚と話速そのものを戻すこと。そのため調声画面で目安（話速0.75〜1.5・音高±0.08・抑揚0.6〜1.5）を外れると注意を出し、自動調声の `FIT_LIMITS` もこの範囲にした。
 - 感情スタイル: `@shared/emotions` の `EMOTION_STYLE_WORDS` / `autoEmotionStyles`。基本のスタイルと同じ話者で、名前に感情語を含むスタイルを選ぶ（ささやき系は使わない）。`computeTuning(…, { autoStyles })` が、感情別の設定が無く強さ0.5以上のときだけ使い、そのときは音高・抑揚の補正をかけない。`CharacterVoice.autoEmotionStyles === false` で無効。話者一覧は `SpeechService` がエンジンURLごとに覚え、`warmUp` で捨てる。
 - 音質フィルター: `src/renderer/shared/voiceFilter.ts`（3.2kHz −2.5dB のピーキング、8kHz −4dB のハイシェルフ、閾値−20dB・比2.5 の圧縮、`room` は0.35秒の残響を0.1）。キャラクター画面の `AudioPlayer` と管理画面の試聴（`playWav(wav, filter)`）で共通。設定 `voice.postFilter`、キャラクター画面へは `ViewSettingsPayload.voiceFilter`。
 - AivisSpeech: `@shared/voiceEngine`。種類は `/engine_manifest` の name で見分け（取れなければポート10101なら aivis）、`SpeechService.engineKindOf` がURLごとに覚える。AivisSpeech はモーラの長さ・高さを返さない（0）ので、`SpeechAudioPayload.query` を null にして口パクを音量で動かす。定型文は使わず、感情の音高補正もかけない（pitchScale を動かすと音質が落ちる。intonationScale は感情表現の強さ）。自動調声は `fixPitch`。起動は `findEngineExe(…, 'aivis')` が `%LOCALAPPDATA%\Programs\AivisSpeech\AivisSpeech-Engine\run.exe` を探し、URLのポートから種類を決める。辞書APIはVOICEVOXと同じ。
 - 確認: AivisSpeech Engine 1.2.0（Windows版を scratch に展開して :10101 で起動）で、話者一覧・合成・感情スタイル（まお: 悲しみ→せつなめ）・辞書の取得・管理画面での切り替えを確認した。
+
+## 管理画面の構成（基本と拡張設定・使い始めの確認）
+
+- 設定画面は、よく使う項目だけを常に出し、細かい項目は設定 `ui.advanced`（右上の「拡張設定」トグル）がONのときだけ各カードの下に出す。区画は `ui.tsx` の `<Advanced show={adv}>`（OFFなら何も描かない）。新しい設定項目を足すときは、初めて使う人が触る必要があるかで基本か拡張かを決める。迷ったら拡張に入れる。
+- 調声画面の「サンプルから」「感情別」「定型文」のタブも拡張設定のときだけ出す（`VoicePage.tsx` の `ADVANCED_TABS`）。
+- `ui.*` だけの変更は表示のためなので、`App.onSettingsChanged` の重い処理（許可フォルダの再設定・キャラクター画面への通知など）を走らせない（`window` と同じ扱い）。
+- 設定画面のいちばん上の「使い始めの確認」（`pages/ReadinessCard.tsx`）は、会話のAI・PMX・読み上げエンジン・音声認識・呼び名の状態を「必要／おすすめ／準備中／OK」で並べ、足りないものへのボタン（はじめに・モデル選択・エンジン起動・調声）を出す。`setupCompleted` が false の間は「はじめの設定を続ける」も出す。
+- 「はじめに」（`pages/SetupPage.tsx`）は、会話のAI（必須）→キャラクター→声→マイク→呼び名→使い方の6手順。会話のAI以外は「あとで設定する」で飛ばせる。声の手順に入ると `voice:speakers` で自動で接続を確かめ、つながらなければ `voice:engine-start` と配布ページを出す。最後の手順で `setup:complete`。
+- 注意: `style.css` の `.num` は数値入力用（`width: 76px !important`）なので、ほかの用途の要素には別の名前を付ける（手順の丸は `.step-num`）。
 
 ## インストーラーの作成
 
@@ -113,6 +123,44 @@ python scripts/make-icon.py  # アイコン（build/icon.ico）を作り直す�
 - URLは秘密情報。`Secrets`（`secrets.bin`、safeStorage）にだけ置き、ログ・エラー・設定取得・レンダラへは出さない（画面には末尾8文字のマスクだけ）。
 - 声かけは `ProactiveEngine` の `schedule` 候補（`calendarSoon`）。同じ予定は一度だけ。「今日の予定は？」は読み取りツール `calendar_agenda`（L0）。予定の題名は他人が決められるので、`<` `>` を除いてから使う。
 - 将来、予定の追加・変更が必要になったら OAuth（デスクトップ用クライアント＋ループバック）か、MCP サーバー（`mcp.servers`）経由にする。
+
+## ローカルLLM（Ollama・会話のみ）
+
+- 設定 `llm.provider`（`claude` / `local`）、`llm.localUrl`、`llm.localModel`。実装は `src/main/llm/LocalLlm.ts`（`OllamaClient` と `RoutingLlm`）、診断は `localProbe.ts`。
+- `LlmAdapter` の3つ目の実装。`RoutingLlm` が会話（`stream`）を設定どおりに振り分け、記憶抽出などの裏の処理（`json`/`text`）は「APIキーがあればClaude、無ければローカル」。呼び出し側はClaudeのモデル名を渡すので、ローカル向けは `localModel` に差し替える。
+- **既定は会話のみ**（`Orchestrator` の `chatOnly`: ツールもWeb検索も渡さず、システムは `CHAT_ONLY_RULES`＝できないと正直に言わせる）。`llm.localTools` をONにするとツールを渡す（実験的）。Web検索はClaudeのサーバーツールなのでローカルでは常に無し。
+- ツール選択の実測（Qwen3 8B、`scripts/eval-local.ts`、14件×3回。出荷前の素のままだと 6〜7/14）:
+
+  | 条件 | ツール選択 | 最初の文字 |
+  | --- | --- | --- |
+  | そのまま（思考オフ） | 約6.3/14 | 約0.06秒 |
+  | 「承認が必要」の文言を外す | 約9.3/14 | 約0.06秒 |
+  | 文言を外す＋思考オン | 14/14（2回） | 約2.6秒 |
+  | **出荷: 文言を外す＋依頼らしい発話のときだけ思考オン** | 12〜14/14 | 雑談 約0.05秒 |
+
+  - 主因は文言: 「承認が必要」を読むと、小さなモデルは会話で「よろしいですか？」と聞くだけでツールを呼ばない。承認は `PermissionGate` が必ず取るので、ローカルでは `toClaudeTools({ approvalHint: false })` と `approvalNote: false`（`Orchestrator` の `approvalHint`）で文言を外す。
+  - 「ツールを必ず呼べ」と強く書き足すだけでは効かない（ばらつきの範囲）。granite4.1:8b は Qwen3 8B より悪かった（形式7/10、ツール6/14）。
+  - 思考は `needsThinking`（`LocalLlm.ts`）で、ファイル・タイマー・記憶・画面・URL などの語を含む発話だけオンにする。ツール結果への返答では考え直さない。偽陽性は遅くなるだけ、偽陰性は「やります」と言うだけになる。
+  - 残る失敗は記憶系（「忘れて」「それは違う」）で、ときどき呼ばずに言葉で済ませる。
+- 14B はVRAM 12GBでは他アプリと同居できずCPUに溢れて約7 tok/s。8B級が上限の目安（`recommendLocal`）。
+- Ollama の `num_ctx` は履歴の上限に合わせて 12288（`LOCAL_NUM_CTX`）。溢れると古い側が黙って切られる。起動時とモデル変更時に `warmUp` で先に読み込む（コールドロードは約1分）。
+- `llm.localForProactive`: Claudeで会話していても、声かけ（`purpose: 'proactive'`）だけは `RoutingLlm` がローカルに回す（ツールなし・思考なし）。`local_down` のときだけ Claude にフォールバック（まだ何も話していないので安全）。他のエラー・中止はそのまま投げる。声かけは直前10分に会話が無いときにしか出ずキャッシュが冷えているため、Claudeに比べて損が無い。
+- 切り替え・モデル変更・`localTools` の切り替えは `endSession()` で次の発話から新しいセッション（ツール一覧とシステムが変わるため）。
+- 再測定: `scripts/eval-local.ts`（ケースは `scripts/eval-cases.ts` で `eval-llm.ts` と共有。出荷と同じ経路を通る。`--runs 3` でばらつきを見る、`--legacy` で出荷前の挙動、`--think` で常時思考）。
+
+## 集中モード
+
+- `src/main/proactive/FocusService.ts`: 開始・終了・残り時間（メモリのみ。アプリの再起動で終わる）。`start(1〜180分)`、置き換え可、`stop()` では終了の声かけを出さない。時間切れで `onEnd(分)` → `ProactiveEngine.fireFocusEnd`（抑止されたらトーストだけ）。
+- 抑止: `suppressedBy` に `focusing` を渡し、`reminder` と `focus_end`（ユーザーが頼んだもの）以外はすべて `focus` で止める。`focus_end` は、能動発話OFF・ミュート・おやすみ・静かな時間帯・直近の会話・回数上限を無視する（全画面と通話中は従う）。1時間あたりの回数の数え方からも除く。
+- 入口はツール `start_focus`（分は省略で25）/ `stop_focus`（どちらもL0）と、トレイの「集中モード」。ツールは `createAssistantTools` の第4引数 `FocusToolPort` を渡したときだけ登録される。
+- 声かけの文面は `PROACTIVE_PROMPTS.focus_end`。評価ケース（`scripts/eval-cases.ts`）にも入っている。ローカルAI（Qwen3 8B、ツール有効）で `start_focus` はほぼ呼べるが、`stop_focus` は集中中かどうかを知らないので、言葉だけで済ませることがある。
+
+## ふりかえり日記
+
+- `src/main/journal/`: `journal.ts`（純粋: 日の範囲、素材→プロンプト、出力の整形、ファイル名、マーカー）と `JournalService.ts`（素材の収集、フォルダ検証、書き込み、スケジュール）。設定 `journal.{enabled,time,folder}`（既定OFF・22:30・`~\Documents\DesktopMMD日記`）。IPC は `journal:run` / `journal:open-folder`。
+- 流れ: `App` が1分ごとに `tick()`（起動30秒後にも1回）。設定時刻を過ぎていて今日の分が未作成なら `run()`。起動後の最初の `tick` では前日の分も見る（PCが落ちていた日）。素材が無ければ LLM を呼ばず次の分にもう一度見る（夜遅くに話すこともあるため）。失敗は30分あけて再試行。
+- 素材: `ConversationRepo.messagesBetween`（`no_memory` のセッションと `source='proactive'` を除く）、`ToolRunRepo.executedBetween`（実行された作業のみ。拒否・ブロックは含めない）、`MemoryRepo.createdBetween` / `schedulesDueBetween`。LLM へは `purpose: 'journal'` の `text()`（`RoutingLlm` により、APIキーがあればClaude、無ければローカル）。
+- 安全: 書くのはアプリで、モデルはパスを決めない。保存先は `PathGuard.check` で許可フォルダ内を確認（フォルダ作成の前と後の2回。ジャンクションで外に出られないように）。同名のファイルは、先頭が `generated-by: DesktopMMD` のマーカーなら再生成してよく、無ければ上書きせず `-2` … に回す。会話本文は `<conversation>` などのタグで囲み、本文中の同名タグは取り除く（データの中の指示に従わない）。ログに日記の内容は出さない。
 
 ## 標準の感情モーション
 

@@ -62,6 +62,16 @@ describe('shapePitch', () => {
     expect(Math.min(...voicedGot)).toBeGreaterThan(5.6 - 3.5 * ST);
   });
 
+  it('a large whole-sentence pitch shift (emotion) cannot lift the top more than 3 semitones above the base-pitch top', () => {
+    const src = query(aps(), { pitchScale: 0.15 });
+    const got = pitches(shapePitch(src));
+    expect(Math.max(...got)).toBeLessThan(6.0 + 3 * ST);
+    expect(Math.max(...got)).toBeGreaterThan(6.0 + 1.5 * ST);
+    // 基本の音高で上げた分は基準に含まれるので削られない
+    const based = pitches(shapePitch(src, undefined, 0.15));
+    expect(Math.max(...based)).toBeCloseTo(6.0 * 2 ** 0.15, 6);
+  });
+
   it('adds the question rise itself (so it is limited too)', () => {
     const q = shapePitch(query([{ moras: [mora(5.6), mora(5.8, 'o')], accent: 1, is_interrogative: true }], { intonationScale: 1.8 }));
     const ms = q.accent_phrases[0].moras;

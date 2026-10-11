@@ -160,6 +160,39 @@ describe('Orchestrator', () => {
     expect(store.conv.messages(sess.id).map((m) => m.role)).toEqual(['user', 'assistant']);
   });
 
+  it('chat-only (local AI): no tools or web search are offered, and the prompt says work is unavailable', async () => {
+    const llm = scripted([{ text: '[happy:0.6]こんにちは。' }]);
+    const { orc, done } = setup(llm, 'approve', { chatOnly: () => true });
+    orc.submit({ kind: 'user', source: 'text', text: 'ファイルを作って' });
+    await done();
+    const req = llm.calls[0];
+    expect(req.tools).toEqual([]);
+    const sys = req.system.map((b) => b.text).join('\n');
+    expect(sys).toContain('会話だけができる状態');
+    expect(sys).not.toContain('web_search');
+    expect(sys).not.toContain('memory_save');
+  });
+
+  it('local with tools: tools are offered, but no approval wording and no web search', async () => {
+    const llm = scripted([{ text: '[happy:0.6]はい。' }]);
+    const { orc, done } = setup(llm, 'approve', { chatOnly: () => false, approvalHint: () => false, webSearchEnabled: () => false });
+    orc.submit({ kind: 'user', source: 'text', text: 'ファイルを作って' });
+    await done();
+    const req = llm.calls[0];
+    expect(req.tools.length).toBeGreaterThan(0);
+    expect(req.tools.some((t) => 'name' in t && t.name === 'web_search')).toBe(false);
+    expect(JSON.stringify(req.tools)).not.toContain('承認が必要');
+    expect(req.system.map((b) => b.text).join('\n')).not.toContain('承認');
+  });
+
+  it('a local_down error is spoken with the Ollama hint', async () => {
+    const llm = scripted([{ text: '', fail: new LlmUnavailableError('refused', 'local_down') }]);
+    const { orc, sentences, done } = setup(llm, 'approve', { chatOnly: () => true });
+    orc.submit({ kind: 'user', source: 'text', text: 'こんにちは' });
+    await done();
+    expect(sentences.map((x) => x.text).join('')).toContain('Ollama');
+  });
+
   it('keeps system and tools byte-identical across turns of a session, history append-only', async () => {
     const llm = scripted([{ text: '[happy:0.5]はい。' }, { text: '[neutral:0.5]そうですね。' }]);
     const { orc, done } = setup(llm);

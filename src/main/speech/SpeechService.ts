@@ -269,7 +269,7 @@ export class SpeechService implements TtsPort {
           return { wav: await this.d.vv.synthesis(q, speaker, signal), query: null, engine: kind };
         }
         // 高すぎる音を抑えるため、音高と抑揚はアプリ側でかける（疑問文の語尾上げも含めて）
-        q = shapePitch(q);
+        q = shapePitch(q, undefined, voice.base.pitchScale);
         const wav = await this.d.vv.synthesis(q, speaker, signal, undefined, false);
         return { wav, query: q, engine: kind };
       } catch (e) {

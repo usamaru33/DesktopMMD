@@ -24,6 +24,8 @@ export interface StreamParams {
   cache?: boolean;
   /** lifetime of every cache breakpoint in this request (default 5m) */
   cacheTtl?: '5m' | '1h';
+  /** local models only: let the model think before answering (slow to the first word, but picks tools far better) */
+  think?: boolean;
 }
 
 export interface JsonParams {
@@ -38,7 +40,7 @@ export interface JsonParams {
 
 /** The seam the Orchestrator and MemoryService depend on (NFR-09). */
 export interface LlmAdapter {
-  readonly kind: 'claude' | 'fake';
+  readonly kind: 'claude' | 'fake' | 'local';
   stream(p: StreamParams): Promise<BetaMessage>;
   json<T>(p: JsonParams): Promise<T>;
   text(p: { model: string; system: string; user: string; maxTokens: number; purpose: string }): Promise<string>;
@@ -49,7 +51,7 @@ export type UsageSink = (model: string, usage: UsageLike, purpose: string) => vo
 export class LlmUnavailableError extends Error {
   constructor(
     message: string,
-    readonly reason: 'no_key' | 'auth' | 'network' | 'rate_limit' | 'server' | 'bad_request' | 'refusal',
+    readonly reason: 'no_key' | 'auth' | 'network' | 'rate_limit' | 'server' | 'bad_request' | 'refusal' | 'local_down',
   ) {
     super(message);
   }

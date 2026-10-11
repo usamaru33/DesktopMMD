@@ -110,6 +110,19 @@ export class ConversationRepo {
     return this.db.all('SELECT * FROM messages WHERE session_id = ? ORDER BY id', sessionId).map(toMessage);
   }
 
+  /**
+   * Messages written in [fromIso, toIso) for the journal. Sessions flagged "この会話は記憶しないで" are left out,
+   * and so are the app's own proactive turns (the user said nothing there).
+   */
+  messagesBetween(fromIso: string, toIso: string): MessageRecord[] {
+    return this.db
+      .all(
+        "SELECT m.* FROM messages m JOIN sessions s ON s.id = m.session_id WHERE s.no_memory = 0 AND m.source != 'proactive' AND m.created_at >= ? AND m.created_at < ? ORDER BY m.id",
+        fromIso, toIso,
+      )
+      .map(toMessage);
+  }
+
   /** Messages not yet passed to the memory extractor, per session, oldest first. */
   unextracted(limit = 200): { session: SessionRecord; messages: MessageRecord[] }[] {
     const rows = this.db.all('SELECT * FROM sessions WHERE extracted = 0 ORDER BY id LIMIT 20');
@@ -217,6 +230,16 @@ export class MemoryRepo {
 
   active(): MemoryRow[] {
     return this.db.all("SELECT * FROM memories WHERE status = 'active'").map(toMemory);
+  }
+
+  /** Active memories created in [fromIso, toIso). */
+  createdBetween(fromIso: string, toIso: string): MemoryRow[] {
+    return this.db.all("SELECT * FROM memories WHERE status = 'active' AND created_at >= ? AND created_at < ? ORDER BY id", fromIso, toIso).map(toMemory);
+  }
+
+  /** Active schedule memories due in [fromIso, toIso). */
+  schedulesDueBetween(fromIso: string, toIso: string): MemoryRow[] {
+    return this.db.all("SELECT * FROM memories WHERE status = 'active' AND kind = 'schedule' AND due_at >= ? AND due_at < ? ORDER BY due_at", fromIso, toIso).map(toMemory);
   }
 
   list(filter: { kind?: MemoryKind; status?: MemoryStatus; query?: string } = {}): MemoryRow[] {
@@ -381,6 +404,13 @@ export class ToolRunRepo {
 
   list(limit: number): ToolRunRecord[] {
     return this.db.all('SELECT * FROM tool_runs ORDER BY id DESC LIMIT ?', limit).map(toToolRun);
+  }
+
+  /** Runs that actually executed (auto-run or approved) in [fromIso, toIso). */
+  executedBetween(fromIso: string, toIso: string): ToolRunRecord[] {
+    return this.db
+      .all("SELECT * FROM tool_runs WHERE decision IN ('auto','approved') AND created_at >= ? AND created_at < ? ORDER BY id", fromIso, toIso)
+      .map(toToolRun);
   }
 }
 

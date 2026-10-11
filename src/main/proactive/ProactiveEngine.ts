@@ -17,6 +17,8 @@ export interface ProactiveDeps {
   now(): Date;
   log: Logger;
   /** カレンダーの予定のうち、withinMin 分以内に始まるもの（key は同じ予定を二度知らせないための識別子） */
+  /** 集中モード中か（声かけを止める） */
+  focusing?(): boolean;
   calendarSoon?(now: Date, withinMin: number): { key: string; text: string; minutes: number }[];
 }
 
@@ -74,6 +76,12 @@ export class ProactiveEngine {
     this.fire(cand.kind, cand.detail, now, cand.scheduleId, cand.calendarKey);
   }
 
+  /** 集中モードが終わった: お疲れさまと休憩の提案（ユーザーが頼んだものなので、ミュート等以外の抑止は受けない） */
+  async fireFocusEnd(minutes: number): Promise<boolean> {
+    await this.d.activity.refreshMicInUse();
+    return this.fire('focus_end', `${minutes}分`, this.d.now());
+  }
+
   /** Exposed for timers/reminders, which go through the same suppression (minus a few rules). */
   async fireReminder(label: string): Promise<boolean> {
     await this.d.activity.refreshMicInUse();
@@ -83,7 +91,7 @@ export class ProactiveEngine {
   private fire(kind: TriggerKind, detail: string, now: Date, scheduleId?: number, calendarKey?: string): boolean {
     const s = this.d.settings();
     const hourAgo = new Date(now.getTime() - 3600_000);
-    const firedInLastHour = this.d.store.proactive.since(hourAgo).filter((e) => e.trigger !== 'reminder' && e.trigger !== 'chime').length;
+    const firedInLastHour = this.d.store.proactive.since(hourAgo).filter((e) => e.trigger !== 'reminder' && e.trigger !== 'chime' && e.trigger !== 'focus_end').length;
     const reason = suppressedBy(
       {
         now,
@@ -96,6 +104,7 @@ export class ProactiveEngine {
         lastConversationAt: this.d.lastConversationAt(),
         firedInLastHour,
         maxPerHour: s.proactive.maxPerHour,
+        focusing: this.d.focusing?.() ?? false,
       },
       kind,
     );

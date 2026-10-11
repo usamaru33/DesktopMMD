@@ -19,6 +19,8 @@ import type {
   Settings,
   ToolRunRecord,
   UsageBreakdownRow,
+  JournalRunResult,
+  LocalLlmProbe,
   UsageSummary,
   VoiceDictWord,
   VoicevoxAccentPhrase,
@@ -280,6 +282,9 @@ export interface AdminInvokeMap {
   'voice:fit': { args: [req: VoiceFitRequest]; ret: VoiceFitResult };
   'voice:fit-cancel': { args: []; ret: void };
   'status:get': { args: []; ret: ServiceStatus };
+  'llm:local-probe': { args: [url?: string]; ret: LocalLlmProbe };
+  'journal:run': { args: []; ret: JournalRunResult };
+  'journal:open-folder': { args: []; ret: void };
   'usage:get': { args: []; ret: UsageSummary };
   'usage:breakdown': { args: []; ret: UsageBreakdownRow[] };
   'setup:complete': { args: []; ret: void };
@@ -292,7 +297,7 @@ export interface AdminInvokeMap {
 export type AdminChannel = keyof AdminInvokeMap;
 
 export const ADMIN_CHANNELS = [
-  'settings:get', 'settings:set', 'secrets:status', 'secrets:set-api-key', 'calendar:status', 'calendar:set-url', 'calendar:sync',
+  'settings:get', 'settings:set', 'secrets:status', 'secrets:set-api-key', 'llm:local-probe', 'journal:run', 'journal:open-folder', 'calendar:status', 'calendar:set-url', 'calendar:sync',
   'character:get', 'character:save', 'character:list', 'character:activate', 'character:create',
   'character:pick-model', 'character:pick-folder', 'character:morph-report',
   'character:skill-status', 'character:skill-create', 'character:open-folder', 'character:mode-get', 'character:mode-set',

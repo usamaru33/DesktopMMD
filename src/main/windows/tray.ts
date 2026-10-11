@@ -13,6 +13,10 @@ export interface TrayActions {
   toggleSleep(): void;
   openAdmin(page?: 'settings' | 'voice' | 'memory' | 'history' | 'tools'): void;
   openGuide(): void;
+  /** 集中モード中なら終わる時刻（HH:MM）、そうでなければ null */
+  focusUntil(): string | null;
+  startFocus(minutes: number): void;
+  stopFocus(): void;
   modes(): { list: string[]; current: string | null };
   setMode(mode: string | null): void;
   quit(): void;
@@ -61,6 +65,16 @@ export function createTray(a: TrayActions): { tray: Tray; refresh(): void } {
       },
     ];
   };
+  const focusMenu = (): Electron.MenuItemConstructorOptions => {
+    const until = a.focusUntil();
+    if (until) {
+      return { label: `集中モード中（${until}まで）`, submenu: [{ label: '集中モードを終わる', click: () => { a.stopFocus(); refresh(); } }] };
+    }
+    return {
+      label: '集中モード',
+      submenu: [25, 50, 90].map((m) => ({ label: `${m}分`, click: () => { a.startFocus(m); refresh(); } })),
+    };
+  };
   const refresh = () => {
     tray.setContextMenu(
       Menu.buildFromTemplate([
@@ -70,6 +84,7 @@ export function createTray(a: TrayActions): { tray: Tray; refresh(): void } {
         { label: 'ミュート', type: 'checkbox', checked: a.isMuted(), click: () => { a.toggleMute(); refresh(); } },
         { label: 'マイク', type: 'checkbox', checked: a.isMicOn(), click: () => { a.toggleMic(); refresh(); } },
         { label: 'おやすみモード', type: 'checkbox', checked: a.isSleeping(), click: () => { a.toggleSleep(); refresh(); } },
+        focusMenu(),
         ...modeMenu(),
         { type: 'separator' },
         { label: '設定…', click: () => a.openAdmin('settings') },

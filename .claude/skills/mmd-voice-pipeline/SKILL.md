@@ -44,7 +44,7 @@ speaker            = emo.styleId ?? voice.speakerId
 ```
 
 - **自動の感情スタイル**: emotions に無い感情で、強さ0.5以上、`voice.autoEmotionStyles !== false` のとき、`autoEmotionStyles(speakers, speakerId)`（同じ話者で名前に「喜び」「かなしみ」「怒り」等を含むスタイル）があればそれを speaker にし、pitchAdd=0・intonationMul=1 にする（音を上げて感情を出すと高音が崩れるため）。
-- **VOICEVOX は音高・抑揚をアプリ側でかける**（speech/pitchShape.ts の `shapePitch`）: 語尾上げ→pitchScale→intonationScale を ENGINE と同じ式でモーラの高さに焼き、文の本来の音域（抑揚1.0の最高・最低）からのはみ出しを上0.5〜2半音・下1.5〜3.5半音で tanh で頭打ち。送るクエリは pitchScale=0・intonationScale=1、`synthesis(…, upspeak=false)`。renderer に渡す query もこれ（語尾上げモーラ入りなので口パクも合う）。
+- **VOICEVOX は音高・抑揚をアプリ側でかける**（speech/pitchShape.ts の `shapePitch`）: 語尾上げ→pitchScale→intonationScale を ENGINE と同じ式でモーラの高さに焼き、文の本来の音域（抑揚1.0の最高・最低）からのはみ出しを上0.5〜2半音・下1.5〜3.5半音で tanh で頭打ち。さらに**絶対上限**として、全体が感情の音高補正などで持ち上がっても、基本の音高（`voice.base.pitchScale`）での本来の最高音から上1.5〜3半音までに頭打ち（`ABSOLUTE_UP_LIMIT`、第3引数 `basePitchScale`）。送るクエリは pitchScale=0・intonationScale=1、`synthesis(…, upspeak=false)`。renderer に渡す query もこれ（語尾上げモーラ入りなので口パクも合う）。
 - **AivisSpeech**（@shared/voiceEngine、`SpeechService.engineKindOf` が /engine_manifest の name で判定）: モーラの長さ・高さが 0 で返るので query=null（口パクは音量）、定型文は使わない、emo.pitchAdd は無視（pitchScale を動かすと劣化。intonationScale は感情表現の強さ）。shapePitch もかけない。既定ポート10101、`run.exe` は `AivisSpeech\AivisSpeech-Engine\`。
 - 調声の目安（UIの注意と自動調声の FIT_LIMITS）: 話速0.75〜1.5、音高±0.08、抑揚0.6〜1.5。
 - 再生前の音質フィルター（renderer/shared/voiceFilter.ts、設定 `voice.postFilter`: off / soft / room）はキャラクター画面と試聴で共通。

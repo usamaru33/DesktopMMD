@@ -10,6 +10,11 @@ export const SETTINGS_VERSION = 2;
 export const DEFAULT_SETTINGS: Settings = {
   activeCharacter: 'default',
   llm: {
+    provider: 'claude',
+    localUrl: 'http://127.0.0.1:11434',
+    localModel: 'qwen3:8b',
+    localTools: false,
+    localForProactive: false,
     chatModel: 'claude-sonnet-5-5',
     utilityModel: 'claude-haiku-4-5',
     proactiveModel: 'claude-haiku-4-5',
@@ -48,6 +53,7 @@ export const DEFAULT_SETTINGS: Settings = {
     chimeMinutes: 0,
   },
   calendar: { enabled: false, leadMinutes: 15 },
+  journal: { enabled: false, time: '22:30', folder: '~\\Documents\\DesktopMMD日記' },
   privacy: { watchActiveWindow: false, saveTranscripts: true },
   hotkeys: {
     pushToTalk: 'Ctrl+Alt+Space',
@@ -58,6 +64,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoUpdate: true,
   autoLaunch: true,
   setupCompleted: false,
+  ui: { advanced: false },
   settingsVersion: SETTINGS_VERSION,
 };
 

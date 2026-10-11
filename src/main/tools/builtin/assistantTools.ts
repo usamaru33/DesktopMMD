@@ -24,7 +24,45 @@ export interface CalendarPort {
   enabled(): boolean;
 }
 
-export function createAssistantTools(timers: TimerPort, memory: MemoryPort, calendar?: CalendarPort): ToolDef[] {
+/** 集中モード（FocusService の窓口） */
+export interface FocusToolPort {
+  start(minutes: number): { ok: true; endsAt: Date; replaced: boolean } | { ok: false; error: string };
+  stop(): { ok: true; remainingMin: number } | { ok: false; error: string };
+}
+
+export function createAssistantTools(timers: TimerPort, memory: MemoryPort, calendar?: CalendarPort, focus?: FocusToolPort): ToolDef[] {
+  const startFocus: ToolDef<{ minutes?: number }> = {
+    name: 'start_focus',
+    title: '集中モード',
+    description:
+      '集中モードを始めます。指定した分数のあいだ、声かけ（挨拶・休憩の提案・雑談）を止めて静かにし、終わったらお疲れさまと休憩の提案をします。「25分集中したい」「作業に集中するから静かにして」などに使います（minutes を省くと25分）。ユーザー自身が設定したタイマーは、集中中も鳴ります。',
+    inputSchema: z.object({ minutes: z.number().int().min(1).max(180).optional() }),
+    level: 'L0',
+    summarize: (i) => ({ targets: [], summary: `${i.minutes ?? 25}分の集中モード` }),
+    async run(i) {
+      const r = focus!.start(i.minutes ?? 25);
+      if (!r.ok) return { ok: false, content: r.error };
+      return {
+        ok: true,
+        content: `集中モードを${i.minutes ?? 25}分間、${fmt(r.endsAt)}まで始めました${r.replaced ? '（前の集中モードは置き換えました）' : ''}。この間は声かけをしません。終わったら声をかけます。`,
+        note: `集中モード ${i.minutes ?? 25}分`,
+      };
+    },
+  };
+
+  const stopFocus: ToolDef<Record<string, never>> = {
+    name: 'stop_focus',
+    title: '集中モードをやめる',
+    description: '集中モードを途中で終わりにします（「集中やめる」「もういいよ」など）。',
+    inputSchema: z.object({}),
+    level: 'L0',
+    summarize: () => ({ targets: [], summary: '集中モードを終える' }),
+    async run() {
+      const r = focus!.stop();
+      return r.ok ? { ok: true, content: `集中モードを終えました（残り${r.remainingMin}分でした）`, note: '集中モードを終えました' } : { ok: false, content: r.error };
+    },
+  };
+
   const calendarAgenda: ToolDef<{ hours?: number }> = {
     name: 'calendar_agenda',
     title: 'カレンダーの予定',
@@ -138,5 +176,5 @@ export function createAssistantTools(timers: TimerPort, memory: MemoryPort, cale
     },
   };
 
-  return [setTimer, setReminder, listTimers, cancelTimer, memorySave, memoryForget, ...(calendar ? [calendarAgenda] : [])];
+  return [setTimer, setReminder, listTimers, cancelTimer, memorySave, memoryForget, ...(calendar ? [calendarAgenda] : []), ...(focus ? [startFocus, stopFocus] : [])];
 }

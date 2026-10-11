@@ -320,6 +320,13 @@ describe('ApprovalBroker voice answers (TC-07)', () => {
 });
 
 describe('ToolRegistry', () => {
+  it('approvalHint=false drops the approval wording from descriptions (local models), default keeps it', () => {
+    const { reg } = setup();
+    const wf = (opts?: { approvalHint?: boolean }) => reg.toClaudeTools(opts).find((t) => t.name === 'write_file')!.description;
+    expect(wf()).toContain('承認が必要');
+    expect(wf({ approvalHint: false })).not.toContain('承認');
+  });
+
   it('lists tools sorted by name with JSON schemas', () => {
     const { reg } = setup();
     const tools = reg.toClaudeTools();

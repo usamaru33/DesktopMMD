@@ -16,6 +16,7 @@ export type CharacterState =
 export type PermissionLevel = 'L0' | 'L1' | 'L2';
 export type VoiceInputMode = 'push' | 'wake' | 'off';
 export type Effort = 'low' | 'medium' | 'high';
+export type LlmProvider = 'claude' | 'local';
 
 export interface AppEntry {
   name: string;
@@ -33,6 +34,15 @@ export interface McpServerConfig {
 export interface Settings {
   activeCharacter: string;
   llm: {
+    /** 会話に使うAI。local は Ollama（会話だけ。ツール・Web検索は使えない） */
+    provider: LlmProvider;
+    /** provider=local のときの Ollama のURLとモデル名 */
+    localUrl: string;
+    localModel: string;
+    /** ローカルAIでも作業（ツール）を使う（実験的）。依頼らしい発話のときだけ考える時間を取る */
+    localTools: boolean;
+    /** 声かけ（挨拶・休憩・リマインダー）だけはローカルAIで作る（Claudeで会話していても。Ollamaが無ければClaude） */
+    localForProactive: boolean;
     chatModel: string;
     utilityModel: string;
     /** model for proactive speech (greetings, break suggestions, reminders) */
@@ -98,6 +108,14 @@ export interface Settings {
     /** 予定の何分前に知らせるか */
     leadMinutes: 5 | 10 | 15 | 30;
   };
+  /** 夜のふりかえり日記（会話と作業をまとめたMarkdownを、決まった時刻に保存する） */
+  journal: {
+    enabled: boolean;
+    /** 書く時刻 HH:MM */
+    time: string;
+    /** 保存先フォルダ（許可フォルダの中であること） */
+    folder: string;
+  };
   privacy: { watchActiveWindow: boolean; saveTranscripts: boolean };
   hotkeys: {
     pushToTalk: string;
@@ -110,6 +128,8 @@ export interface Settings {
   /** 起動時に GitHub のリリースを確認し、新しい版があれば自動で更新する */
   autoUpdate: boolean;
   setupCompleted: boolean;
+  /** 管理画面の表示。advanced: 細かい設定（モーション・キャラ設定の詳細・モデル選択など）も表示する */
+  ui: { advanced: boolean };
   /** settings.json の形式の版。SettingsStore の migrateSettings が使う */
   settingsVersion: number;
 }
@@ -344,6 +364,38 @@ export interface SkillStatus {
   chars: number;
   overlays: string[];
   issues: { level: 'error' | 'warning'; line: number; message: string }[];
+}
+
+export interface JournalRunResult {
+  ok: boolean;
+  path?: string;
+  message: string;
+  reason?: 'disabled' | 'folder' | 'no_material' | 'busy' | 'failed';
+}
+
+export interface LocalHardware {
+  ramGb: number;
+  gpuName: string | null;
+  /** NVIDIA のVRAM合計(GB)。検出できなければ null */
+  vramGb: number | null;
+}
+
+export interface LocalRecommendation {
+  level: 'good' | 'ok' | 'light' | 'api';
+  /** おすすめのモデル名（api のときは null） */
+  model: string | null;
+  message: string;
+}
+
+export interface LocalLlmProbe {
+  ok: boolean;
+  error?: string;
+  version?: string | null;
+  models: string[];
+  /** 設定中のモデルが入っているか */
+  hasModel: boolean;
+  hardware: LocalHardware;
+  recommendation: LocalRecommendation;
 }
 
 export interface ServiceStatus {

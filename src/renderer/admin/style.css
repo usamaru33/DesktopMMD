@@ -826,14 +826,149 @@ textarea.mono {
 .stepper li.done {
   color: var(--ok);
 }
-.stepper .num {
+.stepper .step-num {
   display: grid;
+  flex: none;
   place-items: center;
   width: 22px;
   height: 22px;
   border-radius: 50%;
   background: var(--bg);
   font-size: 12px;
+}
+.stepper li.done .step-num {
+  background: var(--ok-soft);
+}
+.stepper li.current .step-num {
+  background: var(--accent-soft);
+}
+.step-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.step-sub {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+.setup-why {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--info-soft);
+  color: var(--ink-soft);
+}
+.setup-nav {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.status-line {
+  min-height: 24px;
+  margin-bottom: 10px;
+}
+.choice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.choice p {
+  margin: 0;
+}
+.choice.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.choice-title {
+  font-weight: 700;
+}
+.howto {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 2;
+}
+
+/* keyboard key */
+.kbd {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--bg);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* settings: header, readiness checklist, advanced blocks */
+.page-head h1 {
+  margin-bottom: 4px;
+}
+.page-lead {
+  margin: 0 0 16px;
+}
+.adv-switch {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.adv-block {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.adv-label {
+  margin-bottom: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+}
+.ready-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ready-item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+}
+.ready-item.todo {
+  background: var(--danger-soft);
+}
+.ready-item .pill {
+  min-width: 56px;
+  text-align: center;
+}
+.ready-title {
+  font-weight: 700;
+  font-size: 13px;
+}
+.ready-howto {
+  margin: 12px 0 0;
+  color: var(--ink-soft);
 }
 .vmd-grid {
   display: grid;

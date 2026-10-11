@@ -13,6 +13,12 @@ const UPSPEAK_PITCH_ADD = 0.3;
 const UPSPEAK_PITCH_MAX = 6.5;
 const VOWEL_KANA: Record<string, string> = { a: 'ア', i: 'イ', u: 'ウ', e: 'エ', o: 'オ', N: 'ン' };
 
+/**
+ * 絶対的な上限。感情の音高補正などで文ごと持ち上がっても、キャラクターの基本の音高（base.pitchScale）で
+ * 動かした本来の最高音より、knee までは素通し、そこから max に向けて頭打ちにする（半音）。
+ */
+export const ABSOLUTE_UP_LIMIT = { knee: 1.5, max: 3 };
+
 const ST = Math.LN2 / 12; // 1半音 = ln F0 でこれだけ
 
 /** x ≤ knee はそのまま、それより先は max を超えないように丸める */
@@ -25,8 +31,9 @@ export function softLimit(x: number, knee: number, max: number): number {
 /**
  * 語尾上げ・音高・抑揚をモーラの高さに焼き込み、はみ出した音を抑えたクエリを返す。
  * 返すクエリは pitchScale=0 / intonationScale=1 なので、合成は語尾上げを切って（enable_interrogative_upspeak=false）呼ぶこと。
+ * basePitchScale: キャラクターの基本の音高。絶対的な上限の基準（本来の最高音 × 2^base）に使う。感情の補正分はここに含めない。
  */
-export function shapePitch(q: VoicevoxAudioQuery, limits = PITCH_LIMITS): VoicevoxAudioQuery {
+export function shapePitch(q: VoicevoxAudioQuery, limits = PITCH_LIMITS, basePitchScale = 0): VoicevoxAudioQuery {
   const out = structuredClone(q);
   for (const ap of out.accent_phrases) {
     const last = ap.moras[ap.moras.length - 1];
@@ -42,6 +49,7 @@ export function shapePitch(q: VoicevoxAudioQuery, limits = PITCH_LIMITS): Voicev
     }
   }
   const moras: VoicevoxMora[] = out.accent_phrases.flatMap((ap) => (ap.pause_mora ? [...ap.moras, ap.pause_mora] : ap.moras));
+  const refTop = Math.max(0, ...moras.map((m) => m.pitch)) * 2 ** basePitchScale;
   const k = 2 ** (q.pitchScale ?? 0);
   for (const m of moras) m.pitch *= k;
   const voiced = moras.filter((m) => m.pitch > 0);
@@ -55,6 +63,10 @@ export function shapePitch(q: VoicevoxAudioQuery, limits = PITCH_LIMITS): Voicev
       if (p > hi) m.pitch = hi + softLimit((p - hi) / ST, limits.upKnee, limits.upMax) * ST;
       else if (p < lo) m.pitch = lo - softLimit((lo - p) / ST, limits.downKnee, limits.downMax) * ST;
       else m.pitch = p;
+    }
+    // 文全体が持ち上がっていても、基本の音高での最高音から離れすぎないようにする
+    for (const m of voiced) {
+      if (m.pitch > refTop) m.pitch = refTop + softLimit((m.pitch - refTop) / ST, ABSOLUTE_UP_LIMIT.knee, ABSOLUTE_UP_LIMIT.max) * ST;
     }
   }
   out.pitchScale = 0;

@@ -85,6 +85,7 @@ isAllowed(real): allowedDirs（それぞれもrealpath済み）のどれかの�
 | list_dir, search_files | L0 | 許可フォルダ内。search は名前一致＋内容grep（テキストのみ、5MB以下、最大200件） |
 | read_file | L0 | テキスト／PDF（pdf.js系で抽出）／docx（mammoth等）。5MBまで。readsExternal |
 | set_timer, set_reminder | L0 | 同時20件。発火は ProactiveEngine 経由で能動発話 |
+| start_focus, stop_focus | L0 | 集中モード（1〜180分、既定25）。声かけを止めるだけで副作用なし。FocusToolPort を渡したときだけ登録 |
 | memory_save, memory_forget | L0 | forget はごみ箱（trashed、30日） |
 | write_file | L1 | 上書き時は退避。undoable |
 | move_file, rename_file | L1 | 移動先も許可フォルダ内。undoable |

@@ -16,17 +16,21 @@ import {
   shell,
 } from 'electron';
 import { C2M, type C2MPayloads, type DeepPartial, M2A, M2C, type VoiceFitProgressEvent, type VoiceFitRequest, type VoiceFitResult } from '@shared/ipc';
-import { GAZE_LIMIT_DEFAULT, GAZE_LIMIT_RANGE } from '@shared/defaults';
+import { DEFAULT_SETTINGS, GAZE_LIMIT_DEFAULT, GAZE_LIMIT_RANGE } from '@shared/defaults';
 import type { CharacterPreset, ServiceStatus, Settings } from '@shared/types';
 import type { TtsPort, UiPort } from './adapters';
 import { FakeLlm } from './llm/FakeLlm';
 import { LlmClient, type LlmAdapter } from './llm/LlmClient';
+import { listOllamaModels, OllamaClient, RoutingLlm } from './llm/LocalLlm';
+import { detectHardware, recommendLocal } from './llm/localProbe';
 import { UsageService } from './llm/UsageService';
+import { JournalService } from './journal/JournalService';
 import { McpHub } from './mcp/McpHub';
 import { stageOf, STAGES } from './memory/affinity';
 import { MemoryService } from './memory/MemoryService';
 import { Orchestrator } from './orchestrator/Orchestrator';
 import { ActivityMonitor } from './proactive/ActivityMonitor';
+import { FocusService } from './proactive/FocusService';
 import { ProactiveEngine } from './proactive/ProactiveEngine';
 import { TimerService } from './proactive/TimerService';
 import { SidecarClient } from './sidecar/SidecarClient';
@@ -82,6 +86,8 @@ export class App {
   private broker!: ApprovalBroker;
   private llmReal!: LlmClient;
   private llmFake!: FakeLlm;
+  private llmLocal!: OllamaClient;
+  private llmRouter!: RoutingLlm;
   private usage!: UsageService;
   private vv!: VoicevoxClient;
   private speech!: SpeechService;
@@ -96,6 +102,8 @@ export class App {
   private calendar!: CalendarService;
   private mcp!: McpHub;
   private orc!: Orchestrator;
+  private journal!: JournalService;
+  private focus!: FocusService;
   private charWin!: CharacterWindow;
   private adminWin!: AdminWindow;
   private ptt = new PushToTalk(getLogger('ptt'));
@@ -191,7 +199,14 @@ export class App {
     this.usage = new UsageService(this.store, () => this.s, (text, kind) => this.toast(text, kind));
     this.llmReal = new LlmClient(() => this.secrets.getApiKey(), (model, u, purpose) => this.usage.record(model, u, purpose));
     this.llmFake = new FakeLlm(() => this.guard.allowedDirs[0] ?? app.getPath('documents'));
-    this.status.llm = this.fake ? 'fake' : this.secrets.getApiKey() ? 'ok' : 'no_key';
+    this.llmLocal = new OllamaClient({ url: () => this.s.llm.localUrl });
+    this.llmRouter = new RoutingLlm(this.llmReal, this.llmLocal, {
+      provider: () => this.s.llm.provider,
+      localModel: () => this.s.llm.localModel,
+      hasKey: () => !!this.secrets.getApiKey(),
+      proactiveLocal: () => this.s.llm.localForProactive,
+    });
+    this.status.llm = this.llmStatus();
 
     // ---- speech ----
     this.vv = new VoicevoxClient(this.character.voice.engineUrl);
@@ -255,6 +270,14 @@ export class App {
       void this.proactive.fireReminder(`${kind === 'timer' ? 'タイマー' : 'リマインダー'}「${label}」`).then((ok) => {
         if (!ok) this.toast(`⏰ ${label}`, 'info');
       });
+    });
+    this.focus = new FocusService({
+      onEnd: (m) => {
+        void this.proactive.fireFocusEnd(m).then((ok) => {
+          if (!ok) this.toast(`集中モード（${m}分）が終わりました。お疲れさまでした`, 'info');
+        });
+      },
+      onChange: () => this.tray?.refresh(),
     });
     this.registerTools();
     this.activity = new ActivityMonitor({
@@ -324,7 +347,10 @@ export class App {
       ui,
       memory: this.memory,
       activeApp: () => this.activity.activeApp,
-      webSearchEnabled: () => !this.fake,
+      // web_search is a Claude server tool: the local model can't run it
+      webSearchEnabled: () => !this.fake && this.s.llm.provider === 'claude',
+      chatOnly: () => this.s.llm.provider === 'local' && !this.s.llm.localTools,
+      approvalHint: () => this.s.llm.provider !== 'local',
       now: () => new Date(),
       log: getLogger('orchestrator'),
       onLatency: (r) => {
@@ -334,6 +360,23 @@ export class App {
       onTurnDone: ({ proactive }) => {
         if (!proactive) this.proactive.onUserTurn();
       },
+    });
+    this.journal = new JournalService({
+      store: this.store,
+      llm: () => this.llm(),
+      model: () => this.s.llm.utilityModel,
+      settings: () => this.s,
+      guard: this.guard,
+      toolTitle: (name) => this.registry.get(name)?.title ?? name,
+      now: () => new Date(),
+      fs: {
+        mkdir: (dir) => void fs.mkdirSync(dir, { recursive: true }),
+        exists: (file) => fs.existsSync(file),
+        read: (file) => fs.readFileSync(file, 'utf8'),
+        write: (file, data) => fs.writeFileSync(file, data, 'utf8'),
+      },
+      toast: (text, kind) => this.toast(text, kind),
+      log: getLogger('journal'),
     });
     this.calendar = new CalendarService({
       getUrl: () => this.secrets.getCalendarUrl(),
@@ -346,6 +389,7 @@ export class App {
       activity: this.activity,
       settings: () => this.s,
       lastConversationAt: () => this.orc.lastConversation,
+      focusing: () => this.focus.active,
       submit: (t) => this.orc.submit(t),
       isIdle: () => this.orc.state === 'idle',
       now: () => new Date(),
@@ -386,6 +430,15 @@ export class App {
         return { list: sk ? overlaysOf(sk) : [], current: this.mode };
       },
       setMode: (m) => this.setMode(m),
+      focusUntil: () => {
+        const f = this.focus.current;
+        return f ? `${String(f.endsAt.getHours()).padStart(2, '0')}:${String(f.endsAt.getMinutes()).padStart(2, '0')}` : null;
+      },
+      startFocus: (m) => {
+        const r = this.focus.start(m);
+        if (r.ok) this.toast(`${m}分の集中モードを始めます。声かけはお休みします`, 'info');
+      },
+      stopFocus: () => void this.focus.stop(),
       toggleVisible: () => this.charWin.toggleVisible(),
       toggleMute: () => this.settings.set({ voice: { muted: !this.s.voice.muted } }),
       toggleMic: () => this.settings.set({ voice: { micEnabled: !this.s.voice.micEnabled } }),
@@ -399,11 +452,14 @@ export class App {
 
     // ---- background starts ----
     this.timers.start();
+    setInterval(() => void this.journal.tick(), 60_000).unref();
+    setTimeout(() => void this.journal.tick(), 30_000).unref(); // yesterday's diary, if the PC was off at the usual time
     this.activity.start();
     this.proactive.start();
     this.calendar.start();
     this.sidecar.start();
     void this.startVoicevox();
+    this.warmUpLocal();
     void this.mcp.sync(this.s.mcp.servers).then(() => this.setStatus({ mcp: this.mcp.status() }));
     setInterval(() => this.memory.maintain(), 6 * 3600_000).unref();
     this.memory.maintain();
@@ -411,7 +467,7 @@ export class App {
     if (launchedAtLogin()) log.info('launched at login');
     this.startUpdateCheck();
 
-    if (!this.s.setupCompleted || (!this.fake && !this.secrets.getApiKey())) this.adminWin.open('setup');
+    if (!this.s.setupCompleted || (!this.fake && this.s.llm.provider === 'claude' && !this.secrets.getApiKey())) this.adminWin.open('setup');
     if (process.env.MMD_SHOT === '1') this.scheduleScreenshots();
     log.info('window shown');
   }
@@ -431,7 +487,19 @@ export class App {
   }
 
   private llm(): LlmAdapter {
-    return this.fake ? this.llmFake : this.llmReal;
+    return this.fake ? this.llmFake : this.llmRouter;
+  }
+
+  private llmStatus(): ServiceStatus['llm'] {
+    if (this.fake) return 'fake';
+    if (this.s.llm.provider === 'local') return 'ok';
+    return this.secrets.getApiKey() ? 'ok' : 'no_key';
+  }
+
+  /** Load the local model into memory now (a cold load takes ~1 min), so the first message isn't slow. */
+  private warmUpLocal(): void {
+    if (this.fake || (this.s.llm.provider !== 'local' && !this.s.llm.localForProactive)) return;
+    void this.llmLocal.warmUp(this.s.llm.localModel).then((ok) => log.info(`local llm warm-up ${this.s.llm.localModel}: ${ok ? 'ok' : 'failed'}`));
   }
 
   private loadCharacter(id: string): CharacterPreset {
@@ -560,7 +628,7 @@ export class App {
     for (const t of createAssistantTools(this.timers, this.memory, {
       agenda: (hours) => this.calendar.agenda(new Date(), hours).map(formatEvent),
       enabled: () => this.s.calendar.enabled && !!this.secrets.getCalendarUrl(),
-    })) this.registry.register(t);
+    }, this.focus)) this.registry.register(t);
     this.mcp = new McpHub(this.registry, getLogger('mcp'));
   }
 
@@ -772,8 +840,8 @@ export class App {
     if (next.window.hideOnFullscreen !== prev.window.hideOnFullscreen) {
       this.charWin.setFullscreenHidden(next.window.hideOnFullscreen && this.activity.fullscreen);
     }
-    // window position/scale changes alone don't need the heavier work below
-    if (JSON.stringify({ ...next, window: null }) === JSON.stringify({ ...prev, window: null })) return;
+    // window position/scale and admin-screen display changes alone don't need the heavier work below
+    if (JSON.stringify({ ...next, window: null, ui: null }) === JSON.stringify({ ...prev, window: null, ui: null })) return;
     this.guard.setAllowedDirs(next.tools.allowedDirs, [this.paths.root]);
     this.charWin.send(M2C.view, this.viewPayload());
     this.adminWin.send(M2A.settingsChanged, null);
@@ -786,6 +854,12 @@ export class App {
       void this.mcp.sync(next.mcp.servers).then(() => this.setStatus({ mcp: this.mcp.status() }));
       this.orc.endSession(); // tool list changes apply from the next session
     }
+    if (next.llm.provider !== prev.llm.provider || next.llm.localModel !== prev.llm.localModel || next.llm.localUrl !== prev.llm.localUrl || next.llm.localTools !== prev.llm.localTools) {
+      this.orc.endSession(); // tools / system prompt differ between the two modes: start fresh from the next utterance
+      this.setStatus({ llm: this.llmStatus() });
+      this.warmUpLocal();
+    }
+    if (next.llm.localForProactive && !prev.llm.localForProactive) this.warmUpLocal();
     if (next.voice.muted && !prev.voice.muted) this.speech.cancel();
     if (next.sleeping !== prev.sleeping) this.orc.refreshState();
     if (next.autoLaunch !== prev.autoLaunch) applyAutoLaunch(next.autoLaunch, log);
@@ -928,10 +1002,32 @@ export class App {
     handle('settings:get', () => this.s);
     handle('settings:set', (patch: DeepPartial<Settings>) => this.settings.set(sanitizeSettingsPatch(patch)));
     handle('secrets:status', () => this.secrets.status());
+    handle('journal:run', () => this.journal.run(new Date(), true));
+    handle('journal:open-folder', () => {
+      const c = this.guard.check(this.s.journal.folder);
+      if (!c.ok) return;
+      fs.mkdirSync(c.real, { recursive: true });
+      void shell.openPath(c.real);
+    });
+    handle('llm:local-probe', async (url?: string) => {
+      const target = url && /^https?:\/\//i.test(url) ? url : this.s.llm.localUrl;
+      const [r, hardware] = await Promise.all([listOllamaModels(target), detectHardware()]);
+      const models = r.ok ? r.models : [];
+      const want = this.s.llm.localModel;
+      return {
+        ok: r.ok,
+        error: r.ok ? undefined : r.error,
+        version: r.ok ? r.version : null,
+        models,
+        hasModel: models.some((m) => m === want || m === `${want}:latest`),
+        hardware,
+        recommendation: recommendLocal(hardware),
+      };
+    });
     handle('secrets:set-api-key', async (key: string) => {
       try {
         this.secrets.setApiKey(String(key));
-        this.setStatus({ llm: this.fake ? 'fake' : this.secrets.getApiKey() ? 'ok' : 'no_key' });
+        this.setStatus({ llm: this.llmStatus() });
         return { ok: true, masked: this.secrets.status().masked };
       } catch (e) {
         return { ok: false, masked: '', error: (e as Error).message };
@@ -1204,7 +1300,7 @@ export class App {
           }
           const q = { ...(await vv.audioQuery(t, id, ac.signal)), ...p, volumeScale: 1, outputSamplingRate: ANALYSIS_SR, outputStereo: false };
           // 会話と同じ形で合成する（VOICEVOX は音高・抑揚をアプリ側でかけ、高すぎる音を抑える）
-          const wav = kind === 'aivis' ? await vv.synthesis(q, id, ac.signal, 60_000) : await vv.synthesis(shapePitch(q), id, ac.signal, 60_000, false);
+          const wav = kind === 'aivis' ? await vv.synthesis(q, id, ac.signal, 60_000) : await vv.synthesis(shapePitch(q, undefined, p.pitchScale), id, ac.signal, 60_000, false);
           return decodeWav(wav);
         },
       });
@@ -1325,6 +1421,17 @@ export class App {
 /** Renderer input is untrusted: only allow known keys and sane values. */
 function sanitizeSettingsPatch(patch: DeepPartial<Settings>): DeepPartial<Settings> {
   const p = structuredClone(patch ?? {}) as DeepPartial<Settings>;
+  if (p.journal) {
+    if (p.journal.enabled !== undefined) p.journal.enabled = p.journal.enabled === true;
+    if (p.journal.time !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(p.journal.time))) p.journal.time = DEFAULT_SETTINGS.journal.time;
+    if (p.journal.folder !== undefined) p.journal.folder = String(p.journal.folder).trim() || DEFAULT_SETTINGS.journal.folder;
+  }
+  if (p.llm?.provider !== undefined && p.llm.provider !== 'claude' && p.llm.provider !== 'local') p.llm.provider = 'claude';
+  if (p.llm?.localUrl !== undefined) {
+    const u = String(p.llm.localUrl).trim();
+    p.llm.localUrl = /^https?:\/\/[^\s/]+/i.test(u) ? u.replace(/\/+$/, '') : DEFAULT_SETTINGS.llm.localUrl;
+  }
+  if (p.llm?.localModel !== undefined) p.llm.localModel = String(p.llm.localModel).trim() || DEFAULT_SETTINGS.llm.localModel;
   if (p.llm?.monthlyBudgetUsd !== undefined) p.llm.monthlyBudgetUsd = Math.max(0, Number(p.llm.monthlyBudgetUsd) || 0);
   if (p.voice?.volume !== undefined) p.voice.volume = Math.min(2, Math.max(0, Number(p.voice.volume)));
   if (p.voice?.speed !== undefined) p.voice.speed = Math.min(2, Math.max(0.5, Number(p.voice.speed)));
@@ -1333,6 +1440,7 @@ function sanitizeSettingsPatch(patch: DeepPartial<Settings>): DeepPartial<Settin
     p.render.gazeLimit = Number.isFinite(g) ? Math.min(GAZE_LIMIT_RANGE.max, Math.max(GAZE_LIMIT_RANGE.min, Math.round(g))) : GAZE_LIMIT_DEFAULT;
   }
   if (p.render?.fps !== undefined) p.render.fps = Math.min(60, Math.max(10, Math.round(Number(p.render.fps))));
+  if (p.ui?.advanced !== undefined) p.ui.advanced = p.ui.advanced === true;
   if (p.tools?.allowedDirs) p.tools.allowedDirs = p.tools.allowedDirs.filter((d): d is string => typeof d === 'string' && d.trim().length > 0);
   return p;
 }

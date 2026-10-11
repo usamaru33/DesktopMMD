@@ -10,6 +10,8 @@ import { Button, Card, Empty, Field, flash, Pill, Select, Slider, Tabs, Toggle }
 import { VoiceFitTab } from './VoiceFitTab';
 
 type Tab = 'speaker' | 'sample' | 'base' | 'emotion' | 'dict' | 'phrase';
+/** 設定の「拡張設定」がONのときだけ出すタブ */
+const ADVANCED_TABS: Tab[] = ['sample', 'emotion', 'phrase'];
 
 /** これより外は高い音がかすれたり、間延びしたりしやすい（自動調声もこの範囲に収める） */
 const NATURAL: Partial<Record<keyof VoiceBase, [number, number]>> = {
@@ -42,7 +44,9 @@ const WORD_TYPES: { value: WordType; label: string }[] = [
 ];
 
 export function VoicePage(p: { setDirty(d: boolean): void }) {
-  const [tab, setTab] = useState<Tab>('speaker');
+  const [tabSel, setTab] = useState<Tab>('speaker');
+  const [adv, setAdv] = useState(false);
+  const tab: Tab = adv || !ADVANCED_TABS.includes(tabSel) ? tabSel : 'speaker';
   const [saved, setSaved] = useState<CharacterVoice | null>(null);
   const [draft, setDraft] = useState<CharacterVoice | null>(null);
   const [speakers, setSpeakers] = useState<VoicevoxSpeaker[]>([]);
@@ -68,7 +72,10 @@ export function VoicePage(p: { setDirty(d: boolean): void }) {
       setSaved(c.voice);
       setDraft(structuredClone(c.voice));
       setEngineUrl(c.voice.engineUrl);
-      void api('settings:get').then((s) => setFilter(s.voice.postFilter));
+      void api('settings:get').then((s) => {
+        setFilter(s.voice.postFilter);
+        setAdv(s.ui.advanced);
+      });
       await connect(c.voice.engineUrl);
     })();
   }, []);
@@ -194,15 +201,18 @@ export function VoicePage(p: { setDirty(d: boolean): void }) {
         <Tabs
           value={tab}
           onChange={(v) => setTab(v as Tab)}
-          tabs={[
-            { id: 'speaker', label: '声の選択' },
-            { id: 'sample', label: 'サンプルから' },
-            { id: 'base', label: '基本の調声' },
-            { id: 'emotion', label: '感情別' },
-            { id: 'dict', label: '辞書' },
-            { id: 'phrase', label: '定型文', badge: draft.phrases.length ? String(draft.phrases.length) : undefined },
-          ]}
+          tabs={(
+            [
+              { id: 'speaker', label: '声の選択' },
+              { id: 'sample', label: 'サンプルから' },
+              { id: 'base', label: '基本の調声' },
+              { id: 'emotion', label: '感情別' },
+              { id: 'dict', label: '辞書' },
+              { id: 'phrase', label: '定型文', badge: draft.phrases.length ? String(draft.phrases.length) : undefined },
+            ] as { id: Tab; label: string; badge?: string }[]
+          ).filter((t) => adv || !ADVANCED_TABS.includes(t.id))}
         />
+        {!adv && <p class="muted small">サンプル音声からの自動調声・感情別の補正・定型文は、設定画面の「拡張設定」をONにすると使えます。</p>}
 
         {tab === 'speaker' && (
           <Card

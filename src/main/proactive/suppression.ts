@@ -1,6 +1,6 @@
 // Proactive speech: trigger conditions and suppression (spec 5.8). Pure functions over a snapshot.
 
-export type TriggerKind = 'greeting' | 'break' | 'schedule' | 'late_night' | 'small_talk' | 'reminder' | 'anniversary' | 'chime';
+export type TriggerKind = 'greeting' | 'break' | 'schedule' | 'late_night' | 'small_talk' | 'reminder' | 'anniversary' | 'chime' | 'focus_end';
 
 export const BASE_INTERVAL_MIN: Record<TriggerKind, number> = {
   greeting: 0, // handled by "first of the day / after 4h away"
@@ -11,6 +11,7 @@ export const BASE_INTERVAL_MIN: Record<TriggerKind, number> = {
   reminder: 0,
   anniversary: 24 * 60,
   chime: 0, // 時刻の区切りごとに1回
+  focus_end: 0, // 集中モードの終わりに1回
 };
 
 export interface SuppressionInput {
@@ -24,6 +25,8 @@ export interface SuppressionInput {
   lastConversationAt: Date | null;
   firedInLastHour: number;
   maxPerHour: number;
+  /** 集中モード中（ユーザーが頼んだ静かな時間） */
+  focusing?: boolean;
 }
 
 export type SuppressReason =
@@ -34,20 +37,24 @@ export type SuppressReason =
   | 'sleeping'
   | 'quiet_hours'
   | 'recent_conversation'
-  | 'rate_limit';
+  | 'rate_limit'
+  | 'focus';
 
 /** Reminders ignore "recent conversation" (the user asked for them) but respect everything else except quiet hours rate limit. */
 export function suppressedBy(input: SuppressionInput, kind: TriggerKind): SuppressReason | null {
-  if (!input.enabled && kind !== 'reminder') return 'disabled';
+  // things the user asked for (a timer, the end of a focus session) skip the "don't bother me" rules
+  const userAsked = kind === 'reminder' || kind === 'focus_end';
+  if (!input.enabled && !userAsked) return 'disabled';
+  if (input.focusing && !userAsked) return 'focus';
   if (input.fullscreen) return 'fullscreen';
   if (input.micInUseByOtherApp) return 'in_call';
-  if (input.muted && kind !== 'reminder') return 'muted';
-  if (input.sleeping && kind !== 'reminder') return 'sleeping';
-  if (kind !== 'reminder' && inQuietHours(input.now, input.quietHours)) return 'quiet_hours';
-  if (kind !== 'reminder' && kind !== 'chime' && input.lastConversationAt && input.now.getTime() - input.lastConversationAt.getTime() < 10 * 60_000) {
+  if (input.muted && !userAsked) return 'muted';
+  if (input.sleeping && !userAsked) return 'sleeping';
+  if (!userAsked && inQuietHours(input.now, input.quietHours)) return 'quiet_hours';
+  if (!userAsked && kind !== 'chime' && input.lastConversationAt && input.now.getTime() - input.lastConversationAt.getTime() < 10 * 60_000) {
     return 'recent_conversation';
   }
-  if (kind !== 'reminder' && kind !== 'chime' && input.firedInLastHour >= input.maxPerHour) return 'rate_limit';
+  if (!userAsked && kind !== 'chime' && input.firedInLastHour >= input.maxPerHour) return 'rate_limit';
   return null;
 }
 

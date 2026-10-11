@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildSessionSystem, buildTurnContext, formatElapsed, formatNow, OUTPUT_RULES, proactiveUserMessage, workRules,
+  buildSessionSystem, buildTurnContext, CHAT_ONLY_RULES, formatElapsed, formatNow, OUTPUT_RULES, proactiveUserMessage, workRules,
 } from '../../src/main/llm/PromptBuilder';
 import { DEFAULT_CHARACTER } from '../../src/shared/defaults';
 
@@ -79,5 +79,24 @@ describe('PromptBuilder', () => {
     expect(m).toMatch(/^<proactive trigger="break">/);
     expect(m).toContain('休憩');
     expect(proactiveUserMessage('unknown', 'x')).toContain('x');
+  });
+});
+
+describe('chat-only work rules (local AI)', () => {
+  it('replaces the tool rules with a statement that work is unavailable', () => {
+    const input = { allowedDirs: ['C:\Docs'], apps: ['メモ帳'], webSearch: true };
+    expect(workRules({ ...input, tools: false })).toBe(CHAT_ONLY_RULES);
+    expect(CHAT_ONLY_RULES).not.toContain('memory_save');
+    expect(CHAT_ONLY_RULES).toContain('絶対に書かない');
+    expect(workRules(input)).toContain('memory_save'); // default is unchanged
+  });
+
+  it('approvalNote=false drops the "approval needed" wording but keeps the denial rule', () => {
+    const input = { allowedDirs: [], apps: [], webSearch: false };
+    expect(workRules(input)).toContain('承認が必要');
+    const quiet = workRules({ ...input, approvalNote: false });
+    expect(quiet).not.toContain('承認');
+    expect(quiet).toContain('よろしいですか');
+    expect(quiet).toContain('許可されなかった作業は繰り返さず');
   });
 });

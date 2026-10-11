@@ -76,10 +76,12 @@ cos < 0.35 は除外。上位8件、本文合計 800トークン（文字数/1.5
 | late_night | bedtime を過ぎて操作中 | 60分 |
 | small_talk | 待機60分以上かつ親密度段階3以上 | 3時間 |
 | reminder | set_reminder / set_timer の時刻 | 1回（ユーザー自身が頼んだものなので、全画面と通話中以外の抑止は無視。抑止されたらトーストだけ出す） |
+| focus_end | 集中モード（`FocusService`）の時間切れ | 1回（reminder と同じ扱い。途中で止めたときは出さない） |
 
 抑止（いずれか該当で発火しない、tests/unit/suppression.test.ts）:
 - 全画面アプリ使用中（`ActivityMonitor.isFullscreenWindow`: 前面ウィンドウがディスプレイと±1pxで**一致**し、2回連続で検出されたとき）。最大化ウィンドウは見えない枠で約8pxはみ出すので「以上」で比べると誤検出する。デスクトップ（explorer.exe）などのシェルは get-windows の表示名が日本語版で「エクスプローラー」になるので、**exe のファイル名**で除外する。隠すかどうかは設定 `window.hideOnFullscreen`（OFFで常に表示）
 - マイクが他アプリで使用中（通話中とみなす。Windowsのレジストリ `CapabilityAccessManager\ConsentStore\microphone` の LastUsedTimeStop=0 を見る）。PowerShell起動はCPUを食うので、**声をかける直前にだけ**確認する（常時ポーリングしない、NFR-04）
+- 集中モード中（`FocusService.active`）: `reminder` と `focus_end` 以外は全部止める（reason `focus`）
 - ミュート、おやすみモード、静かな時間帯（quietHours、日付またぎ対応）
 - 直前10分以内に会話あり
 - 全体で1時間あたり2回まで
@@ -94,3 +96,9 @@ cos < 0.35 は除外。上位8件、本文合計 800トークン（文字数/1.5
 - 1時間単位で「操作あり/なし」と前面アプリ名（許可時）を usage_patterns に集計（30日分）。
 - greeting と small_talk は、その時間帯の過去の操作確率が低い時間（≒寝ている・不在が多い）には出さない。
 - break の90分は、過去の連続作業の中央値が長いユーザーには最大120分まで伸ばす。
+
+## 8. ふりかえり日記（journal/）
+
+- 毎日の指定時刻に、その日の会話・実行した作業・覚えたこと・明日が期日の schedule を材料に `utilityModel` で要約し、許可フォルダ内の Markdown に保存する（設定 `journal`、既定OFF）。
+- 材料から必ず除く: `no_memory` のセッション、`source='proactive'` のメッセージ、拒否・ブロックされた作業。保存はアプリが行い、モデルはパスを決めない。保存先は PathGuard で2回確認する。
+- 会話本文はデータ: `<conversation>` で囲み、本文中の同名タグは除く。出力に感情タグ・detail は不要なので `stripReplyMarkup` で落としてから渡す。

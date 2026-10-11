@@ -27,11 +27,16 @@ export class ToolRegistry {
     return this.list().filter((d) => !d.enabled || d.enabled());
   }
 
-  /** Claude tool definitions (client tools only; web_search is added by LlmClient). */
-  toClaudeTools(): Anthropic.Tool[] {
+  /**
+   * Claude tool definitions (client tools only; web_search is added by LlmClient).
+   * approvalHint=false drops the "needs approval" wording: small local models read it as "ask the user in
+   * chat first" and never call the tool (the app asks via PermissionGate regardless).
+   */
+  toClaudeTools(opts: { approvalHint?: boolean } = {}): Anthropic.Tool[] {
+    const hint = opts.approvalHint !== false;
     return this.enabled().map((d) => ({
       name: d.name,
-      description: `${d.description}${d.level !== 'L0' ? `（実行前にユーザーの${d.level === 'L2' ? 'クリック' : ''}承認が必要）` : ''}`,
+      description: `${hint ? d.description : d.description.replace(/必ずユーザーの(クリック)?承認が必要です。?/g, '')}${hint && d.level !== 'L0' ? `（実行前にユーザーの${d.level === 'L2' ? 'クリック' : ''}承認が必要）` : ''}`,
       input_schema: d.jsonSchema ?? toInputSchema(d.inputSchema),
     }));
   }

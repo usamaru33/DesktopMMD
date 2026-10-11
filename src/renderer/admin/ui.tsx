@@ -29,6 +29,17 @@ export function Field(p: { label: string; hint?: string; children: ComponentChil
   );
 }
 
+/** カードの中の「拡張設定」の区画。拡張設定がOFFなら何も出さない */
+export function Advanced(p: { show: boolean; children: ComponentChildren; grid?: boolean }) {
+  if (!p.show) return null;
+  return (
+    <div class="adv-block">
+      <div class="adv-label">拡張設定</div>
+      {p.grid === false ? p.children : <div class="grid2">{p.children}</div>}
+    </div>
+  );
+}
+
 export function Toggle(p: { checked: boolean; onChange(v: boolean): void; label?: string; disabled?: boolean }) {
   return (
     <button

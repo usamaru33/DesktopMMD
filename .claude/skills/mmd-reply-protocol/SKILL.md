@@ -103,6 +103,16 @@ type ReplyEvent =
 - 利用量: `finalMessage().usage` の input/output/cache_read/cache_creation を usage_daily に積む。単価表は `llm/pricing.ts` に置く（Sonnet 5.5: $2/$10, cache read $0.20 / Haiku 4.5: $1/$5 per MTok）。月次推定が上限の80%で警告、100%で会話モデルを utilityModel に切替。
 - APIキーは Secrets から取得して `new Anthropic({ apiKey, maxRetries: 0 })`。レンダラには渡さない。
 
+## 5.1 ローカルLLM（Ollama）
+
+- `settings.llm.provider = 'local'` のとき、会話は `OllamaClient`（`LlmAdapter` の実装）が受ける。`RoutingLlm` が振り分け、モデル名は `localModel` に差し替える。
+- 既定は**ツールもWeb検索も付けない**（`Orchestrator.chatOnly`）。システムの「作業の規則」は `CHAT_ONLY_RULES` に替わる（できないことを正直に言わせる。小型モデルは放っておくと「セットしますね」と約束する）。プロンプトを変えたら `scripts/eval-local.ts` か実機で「タイマーをセットして」「ファイルを作って」に断るかを確かめる。
+- `llm.localTools`（実験的）をONにすると、ツールを付ける。そのとき**「承認が必要」の文言をツール説明とシステムから外す**（`approvalHint:false` / `approvalNote:false`）。小型モデルはそれを読むと会話で確認するだけでツールを呼ばない（ツール選択 約6→約9/14）。承認自体は PermissionGate が必ず取る。思考（`think`）は `needsThinking` の発話だけオン（14/14 まで上がるが最初の文字が約2.6秒遅れるため）。Web検索はローカルでは常に無し。
+- Claude専用の機能（cache_control、effort、thinking、fallbacks）は送らない。`think:false`、`num_ctx` は 12288 固定。利用額は記録しない（`UsageService` を通さない）。
+- `llm.localForProactive`: Claude会話でも、`purpose:'proactive'` の `stream` だけローカルへ（`RoutingLlm`）。ツール・思考なし。`local_down` なら Claude にフォールバック。
+- 記憶抽出などの `json()`/`text()` は、APIキーがあればClaude、無ければローカル（Ollama の `format` にスキーマを渡す）。
+- 接続不能・モデル未取得は `LlmUnavailableError('local_down')`。Orchestrator が定型文を話す。
+
 ## 6. 短期履歴（Orchestrator側）
 
 - 直近20往復または約12,000トークン（文字数/1.5で近似）。超えた古い部分は utilityModel で要約し、要約を先頭の user ブロック「（これまでの会話の要約）…」として置く。
