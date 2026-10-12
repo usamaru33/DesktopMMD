@@ -37,6 +37,13 @@ function envelope(t: number, dur: number, attack = 0.15, release = 0.45): number
 export interface Gesture {
   duration: number;
   pose(t: number): Pose;
+  /** optional face over the gesture: eyes closed 0..1, mouth open ("あ") 0..1 — e.g. a yawn */
+  face?(t: number): GestureFace;
+}
+
+export interface GestureFace {
+  eyes: number;
+  mouth: number;
 }
 
 /** One-shot reactions used when no VMD is available for an emotion (spec 4.2 table). */
@@ -164,6 +171,63 @@ export function touchGesture(part: TouchPart, side: 1 | -1 = 1): Gesture {
   }
 }
 
+/** Slow, deep breathing while asleep (≈5 s): the chest rises and the head sinks a little with each breath. */
+export function sleepBreath(time: number): Pose {
+  const p = ZERO_POSE();
+  const b = Math.sin((time / 5) * Math.PI * 2);
+  p.upper[0] = -2.2 * D * b;
+  p.head[0] = 1.5 * D * b;
+  p.rootY = 0.012 * b;
+  return p;
+}
+
+/** Poked while asleep: stirs (head lifts a little and sinks back), eyes stay closed. */
+export function stirGesture(side: 1 | -1 = 1): Gesture {
+  return {
+    duration: 1.8,
+    pose: (t) => {
+      const p = ZERO_POSE();
+      const env = envelope(t, 1.8, 0.25, 0.55);
+      p.head[0] = -7 * D * env;
+      p.head[2] = 5 * D * side * env;
+      p.upper[1] = 2 * D * side * env;
+      return p;
+    },
+  };
+}
+
+/** Coming back to the user: asleep → a stretch and a shake of the head; awake → perks up. */
+export function wakeGesture(asleep: boolean, side: 1 | -1 = 1): Gesture {
+  if (!asleep) return fidgetGesture('perk');
+  return {
+    duration: 2.6,
+    pose: (t) => {
+      const p = ZERO_POSE();
+      // lift the head with a start, stretch back, then a little shake to wake up
+      const lift = curve(t, [[0, 0], [0.25, 1], [1.4, 0.8], [2.6, 0]]);
+      p.head[0] = -6 * D * lift;
+      p.upper[0] = -5 * D * curve(t, [[0.3, 0], [0.9, 1], [1.6, 1], [2.3, 0]]);
+      p.rootY = 0.12 * curve(t, [[0.3, 0], [0.9, 1], [1.6, 1], [2.3, 0]]);
+      p.head[1] = 6 * D * side * Math.sin((t - 1.6) * 14) * curve(t, [[1.6, 0], [1.8, 1], [2.3, 1], [2.6, 0]]);
+      return p;
+    },
+  };
+}
+
+/** Put down after being carried: a small knee-dip on landing, a bounce, and a relieved breath. */
+export function landGesture(): Gesture {
+  return {
+    duration: 1.2,
+    pose: (t) => {
+      const p = ZERO_POSE();
+      p.rootY = -0.12 * curve(t, [[0, 0], [0.12, 1], [0.35, 0], [0.5, -0.3], [0.7, 0]]) + 0.08 * curve(t, [[0.3, 0], [0.45, 1], [0.65, 0]]);
+      p.upper[0] = 5 * D * curve(t, [[0, 0], [0.15, 1], [0.5, 0.3], [1.2, 0]]);
+      p.head[0] = 4 * D * curve(t, [[0.4, 0], [0.7, 1], [1.2, 0]]);
+      return p;
+    },
+  };
+}
+
 /** Being stroked on the head: lean into the hand, eyes closed, a slow happy sway. */
 export function patPose(t: number): Pose {
   const p = ZERO_POSE();
@@ -199,7 +263,7 @@ export function statePose(s: CharacterState, time: number, side: 1 | -1): Pose {
       p.head[0] = 16 * D + 2 * D * Math.sin(time * 0.6);
       p.neck[0] = 4 * D;
       p.upper[0] = 3 * D;
-      break;
+      return addPose(p, sleepBreath(time));
     default:
       break;
   }
@@ -340,8 +404,20 @@ function curve(t: number, keys: readonly (readonly [number, number])[]): number 
   return 0;
 }
 
-export type FidgetKind = 'look_around' | 'tilt' | 'stretch' | 'hum' | 'sway' | 'perk';
-export const FIDGETS: FidgetKind[] = ['look_around', 'tilt', 'stretch', 'hum', 'sway', 'perk'];
+export type FidgetKind = 'look_around' | 'tilt' | 'stretch' | 'hum' | 'sway' | 'perk' | 'yawn' | 'nod_off' | 'sneeze';
+export const FIDGETS: FidgetKind[] = ['look_around', 'tilt', 'stretch', 'hum', 'sway', 'perk', 'yawn', 'nod_off', 'sneeze'];
+
+/**
+ * How likely each fidget is at this hour (relative weights): a daily rhythm. Drowsy in the morning (yawns,
+ * stretches), a post-lunch dip, nodding off late at night; a rare sneeze any time.
+ */
+export function fidgetWeights(hour: number): Record<FidgetKind, number> {
+  const w: Record<FidgetKind, number> = { look_around: 1, tilt: 1, stretch: 1, hum: 1, sway: 1, perk: 1, yawn: 0.15, nod_off: 0, sneeze: 0.12 };
+  if (hour >= 5 && hour < 10) Object.assign(w, { yawn: 1.5, stretch: 2, perk: 0.5, hum: 0.6 });
+  else if (hour >= 13 && hour < 15) Object.assign(w, { yawn: 1.2, nod_off: 0.6 });
+  else if (hour >= 22 || hour < 5) Object.assign(w, { yawn: 1.5, nod_off: 2, hum: 0.3, perk: 0.2, look_around: 0.6 });
+  return w;
+}
 
 /** Small idle actions so the character doesn't stand like a statue (upper body / neck / head / root only). */
 export function fidgetGesture(kind: FidgetKind, scale = 1, side: 1 | -1 = 1): Gesture {
@@ -415,6 +491,47 @@ export function fidgetGesture(kind: FidgetKind, scale = 1, side: 1 | -1 = 1): Ge
           return p;
         },
       };
+    case 'yawn': { // head back, mouth wide, eyes squeezed shut, then a little shake
+      const open = (t: number) => curve(t, [[0, 0], [0.4, 0.2], [1.1, 1], [2.1, 1], [2.7, 0], [3.3, 0]]);
+      return {
+        duration: 3.3,
+        pose: (t) => {
+          const p = ZERO_POSE();
+          p.head[0] = -9 * D * k * open(t);
+          p.upper[0] = -3 * D * k * open(t);
+          p.head[2] = 3 * D * k * side * curve(t, [[2.4, 0], [2.7, 1], [3.3, 0]]);
+          return p;
+        },
+        face: (t) => ({ eyes: 0.85 * open(t), mouth: 0.9 * open(t) }),
+      };
+    }
+    case 'nod_off': { // 舟をこぐ: the head sinks slowly as the eyes close… then jerks back up
+      const sink = (t: number) => curve(t, [[0, 0], [2.2, 1], [2.35, 1], [2.6, -0.25], [3.6, 0]]);
+      return {
+        duration: 3.6,
+        pose: (t) => {
+          const p = ZERO_POSE();
+          p.head[0] = 14 * D * k * sink(t);
+          p.neck[0] = 4 * D * k * sink(t);
+          return p;
+        },
+        face: (t) => ({ eyes: curve(t, [[0, 0], [1.6, 1], [2.35, 1], [2.5, 0], [3.6, 0]]), mouth: 0 }),
+      };
+    }
+    case 'sneeze': { // a breath in (head back, eyes narrowing)… and a quick bob forward
+      const inhale = (t: number) => curve(t, [[0, 0], [0.7, 1], [0.78, 1], [0.86, 0], [1.6, 0]]);
+      const out = (t: number) => curve(t, [[0.74, 0], [0.86, 1], [1.0, 1], [1.6, 0]]);
+      return {
+        duration: 1.6,
+        pose: (t) => {
+          const p = ZERO_POSE();
+          p.head[0] = (-7 * inhale(t) + 11 * out(t)) * D * k;
+          p.upper[0] = (-3 * inhale(t) + 4 * out(t)) * D * k;
+          return p;
+        },
+        face: (t) => ({ eyes: Math.max(0.5 * inhale(t), out(t)), mouth: 0.45 * inhale(t) }),
+      };
+    }
   }
 }
 
@@ -439,8 +556,8 @@ export class Fidgeter {
     this.next = now + 10;
   }
 
-  /** eligible: idle, awake, not already moving. Returns a gesture when one is due. */
-  update(t: number, profile: LivelinessProfile, eligible: boolean): Gesture | null {
+  /** eligible: idle, awake, not already moving. Returns a gesture when one is due. `hour` (0–23) shapes the choice. */
+  update(t: number, profile: LivelinessProfile, eligible: boolean, hour: () => number = () => 12): Gesture | null {
     const range = profile.fidgetEvery;
     if (!range) return null;
     if (!eligible) {
@@ -449,8 +566,11 @@ export class Fidgeter {
     }
     if (t < this.next) return null;
     this.next = t + range[0] + this.rng() * (range[1] - range[0]);
-    let kind = FIDGETS[Math.min(FIDGETS.length - 1, Math.floor(this.rng() * FIDGETS.length))];
-    if (kind === this.last) kind = FIDGETS[(FIDGETS.indexOf(kind) + 1) % FIDGETS.length]; // no immediate repeats
+    const w = fidgetWeights(hour());
+    if (this.last) w[this.last] = 0; // no immediate repeats
+    const total = FIDGETS.reduce((s, f) => s + w[f], 0);
+    let r = this.rng() * total;
+    const kind = FIDGETS.find((f) => (r -= w[f]) < 0 && w[f] > 0) ?? FIDGETS.find((f) => w[f] > 0)!;
     this.last = kind;
     return fidgetGesture(kind, profile.gestureScale, this.rng() < 0.5 ? 1 : -1);
   }

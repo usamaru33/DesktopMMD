@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyTouch, faceUnit, PatDetector, sideOf, type TouchPoints } from '../../src/renderer/character/character/touchZones';
-import { touchGesture } from '../../src/renderer/character/character/motion';
+import { sleepBreath, stirGesture, touchGesture, wakeGesture } from '../../src/renderer/character/character/motion';
 
 // a standing model, 720 px tall window: face at y=150, neck 40 px below, hands at the hips
 const pts: TouchPoints = {
@@ -82,5 +82,20 @@ describe('touchGesture', () => {
       const end = g.pose(g.duration);
       for (const v of [...end.head, ...end.neck, ...end.upper, end.rootY]) expect(Math.abs(v)).toBeLessThan(1e-6);
     }
+  });
+});
+
+describe('sleep and wake motions', () => {
+  it('stirring and waking settle back to rest', () => {
+    for (const g of [stirGesture(1), wakeGesture(true, -1), wakeGesture(false)]) {
+      const end = g.pose(g.duration);
+      for (const v of [...end.head, ...end.neck, ...end.upper, end.rootY]) expect(Math.abs(v)).toBeLessThan(1e-6);
+    }
+  });
+  it('sleep breathing is slow and small', () => {
+    const a = sleepBreath(1.25).upper[0];
+    expect(Math.abs(a)).toBeGreaterThan(0.03);
+    expect(Math.abs(a)).toBeLessThan(0.05);
+    expect(sleepBreath(0).upper[0]).toBeCloseTo(sleepBreath(5).upper[0]);
   });
 });

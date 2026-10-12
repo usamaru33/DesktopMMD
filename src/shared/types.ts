@@ -20,8 +20,8 @@ export type Effort = 'low' | 'medium' | 'high';
 export type Liveliness = 'calm' | 'normal' | 'lively';
 /** キャラクターのどこを触ったか（画面上のボーン位置から決める） */
 export type TouchPart = 'head' | 'cheek' | 'hand' | 'shoulder' | 'body' | 'legs';
-/** tap: クリック、pat: 頭の上でマウスを左右に動かす（なでる） */
-export type TouchKind = 'tap' | 'pat';
+/** tap: クリック、pat: 頭の上でマウスを左右に動かす（なでる）、lift: ドラッグで持ち上げる */
+export type TouchKind = 'tap' | 'pat' | 'lift';
 export type LlmProvider = 'claude' | 'local';
 
 export interface AppEntry {

@@ -100,6 +100,8 @@ export const M2C = {
   visible: 'window:visible',
   /** a line said in reaction to being touched (audio, if any, follows as speechAudio with preview: true) */
   touchLine: 'character:touch-line',
+  /** the user came back to the PC (asleep: she had dozed off waiting) */
+  wake: 'character:wake',
 } as const;
 
 export interface TouchLinePayload {
@@ -179,6 +181,7 @@ export interface M2CPayloads {
   [M2C.sleepy]: number;
   [M2C.visible]: boolean;
   [M2C.touchLine]: TouchLinePayload;
+  [M2C.wake]: { asleep: boolean };
 }
 
 // ---------------- admin window: invoke (request/response) ----------------

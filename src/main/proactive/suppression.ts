@@ -1,6 +1,8 @@
 // Proactive speech: trigger conditions and suppression (spec 5.8). Pure functions over a snapshot.
 
-export type TriggerKind = 'greeting' | 'break' | 'schedule' | 'late_night' | 'small_talk' | 'reminder' | 'anniversary' | 'chime' | 'focus_end';
+export type TriggerKind =
+  | 'greeting' | 'break' | 'schedule' | 'late_night' | 'small_talk' | 'reminder' | 'anniversary' | 'chime' | 'focus_end'
+  | 'milestone' | 'birthday' | 'stage_up' | 'follow_up';
 
 export const BASE_INTERVAL_MIN: Record<TriggerKind, number> = {
   greeting: 0, // handled by "first of the day / after 4h away"
@@ -12,6 +14,10 @@ export const BASE_INTERVAL_MIN: Record<TriggerKind, number> = {
   anniversary: 24 * 60,
   chime: 0, // 時刻の区切りごとに1回
   focus_end: 0, // 集中モードの終わりに1回
+  milestone: 0, // 出会って100日など、それぞれ1回
+  birthday: 0, // 毎年1回
+  stage_up: 0, // 段階が上がったときに1回
+  follow_up: 6 * 60, // 済んだ予定のその後を聞くのは、多くても6時間に1回
 };
 
 export interface SuppressionInput {

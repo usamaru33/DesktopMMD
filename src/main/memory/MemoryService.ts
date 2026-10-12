@@ -28,6 +28,8 @@ export interface MemoryDeps {
   log: Logger;
   onChanged?(): void;
   onMood?(mood: number): void;
+  /** the affinity stage went up (初対面 → 顔なじみ …) */
+  onStageUp?(stage: number): void;
   enabled(): boolean; // privacy.saveTranscripts
 }
 
@@ -146,7 +148,9 @@ export class MemoryService implements MemoryPortForTurns, MemoryPort {
           });
           saved++;
         }
-        const rel = applyAffinityDelta(this.d.store.relationship.get(), r.affinity_delta ?? 0, localDate(this.d.now()));
+        const before = this.d.store.relationship.get();
+        const rel = applyAffinityDelta(before, r.affinity_delta ?? 0, localDate(this.d.now()));
+        if (stageOf(rel.affinity) > stageOf(before.affinity)) this.d.onStageUp?.(stageOf(rel.affinity));
         if (typeof r.mood === 'number') rel.mood = Math.max(-1, Math.min(1, rel.mood * 0.7 + r.mood * 0.3));
         this.d.store.relationship.save(rel);
         this.d.store.conv.setExtractedUpto(session.id, messages[messages.length - 1].id, closed);

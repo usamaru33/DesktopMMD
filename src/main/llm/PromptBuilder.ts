@@ -154,6 +154,10 @@ export const PROACTIVE_PROMPTS: Record<string, (detail: string) => string> = {
   focus_end: (d) => `ユーザーが頼んだ集中の時間（${d}）が終わった。お疲れさまを伝えて、水分補給や軽い伸びなど短い休憩を軽く提案する。1〜2文。`,
   chime: (d) => `${d}。時刻を伝え、「そろそろ休憩しませんか」と軽く提案する。1〜2文。`,
   anniversary: (d) => `今日はユーザーと出会った記念日（${d}）。さりげなくお祝いを言う。1〜2文。`,
+  milestone: (d) => `今日でユーザーと${d}。うれしい気持ちを込めて、さりげなく触れる。1〜2文。`,
+  birthday: (d) => `今日はユーザーの誕生日（覚えていること: ${d}）。心を込めてお祝いを言う。1〜2文。`,
+  stage_up: (d) => `ユーザーとの関係が深まり、${d}。これからもよろしくという気持ちを、照れながら短く伝える。関係の段階の名前は言わない。1〜2文。`,
+  follow_up: (d) => `以前ユーザーから聞いていた予定が済んだころ: ${d}。どうだったかを軽く尋ねる。答えたくなさそうな話題なら深追いしない。1〜2文。`,
 };
 
 export function proactiveUserMessage(trigger: string, detail: string): string {

@@ -11,12 +11,13 @@ import type { MouthWeights } from '../lipsync';
 import { ArmRig } from './armRig';
 import { FallbackAvatar } from './FallbackAvatar';
 import { installFastBoneSync, type MMDPhysicsLike } from './physicsSync';
+import { Carry, carryPose, inertialGravity } from './carry';
 import { classifyTouch, faceUnit, type ScreenPt, sideOf, type TouchPoints } from './touchZones';
 import { loadVmdClips, VmdLayer } from './vmdLayer';
 import { type FacePart, faceLevel, PART_WEIGHT, resolveFace, type ResolvedFace, normalizeName } from './morphs';
 import {
   addPose, Blinker, blendPose, CrossFader, distributeGaze, emotionGesture, Fidgeter, frameRateFor, type Gesture, idlePose, limitGaze, LIVELINESS,
-  type LivelinessProfile, patPose, physicsSteps, smootherstep, type Pose, speakingPose, Spring2, statePose, touchGesture, ZERO_POSE,
+  type LivelinessProfile, landGesture, patPose, physicsSteps, sleepBreath, stirGesture, wakeGesture, smootherstep, type Pose, speakingPose, Spring2, statePose, touchGesture, ZERO_POSE,
 } from './motion';
 import { blendLayer, chooseTalkGesture, HOLD, type TalkGestureKind, type TalkLayer, talkPose } from './talkGestures';
 
@@ -26,6 +27,9 @@ interface ManagedBone {
   bone: THREE.Bone;
   rest: THREE.Quaternion;
 }
+
+/** MMDPhysics' default gravity (world units/s², 1 unit ≈ 8 cm) */
+const GRAVITY = 9.8 * 10;
 
 interface TalkGesture {
   kind: TalkGestureKind;
@@ -81,6 +85,15 @@ export class CharacterController {
   private patting = false;
   /** 0..1: how much the "being patted" posture shows */
   private patAmt = 0;
+  /** the window is being dragged (she is "picked up") */
+  private held = false;
+  private carry = new Carry();
+  /** 0..1: how much the carried lean shows */
+  private carryAmt = 0;
+  /** the physics world, to add the pull of a moving window to its gravity */
+  private physicsWorld: { setGravity(v: unknown): void } | null = null;
+  private gravityVec: { setValue(x: number, y: number, z: number): void } | null = null;
+  private gravityTilted = false;
   private emo: { cur: Emotion; level: number; target: number; prev: Emotion; prevLevel: number } = { cur: 'neutral', level: 0, target: 0, prev: 'neutral', prevLevel: 0 };
   private emoHoldUntil = 0;
   private gestures: ActiveGesture[] = [];
@@ -114,6 +127,8 @@ export class CharacterController {
   private fps = 30;
   private lastFrame = 0;
   private hidden = false;
+  /** called after each drawn frame: overlay animations update in step with the canvas (no extra repaints) */
+  onFrame: ((time: number) => void) | null = null;
   private loop: ((now: number) => void) | null = null;
   private raf = 0;
   private pickReq: { x: number; y: number; cb: (hit: boolean) => void } | null = null;
@@ -195,6 +210,7 @@ export class CharacterController {
       this.helper.enable('physics', false);
       const physicsObj = (this.helper as unknown as { objects: WeakMap<object, { physics?: MMDPhysicsLike }> }).objects.get(mesh)?.physics;
       if (physicsObj) installFastBoneSync(physicsObj);
+      this.physicsWorld = (physicsObj as unknown as { world?: { setGravity(v: unknown): void } } | undefined)?.world ?? null;
 
       const mixer = (this.helper as unknown as { objects: WeakMap<object, { mixer?: THREE.AnimationMixer }> }).objects.get(mesh)?.mixer;
       const clips = await motions;
@@ -233,6 +249,8 @@ export class CharacterController {
     this.face = null;
     this.bones = {};
     this.touchBones = { hands: [], shoulders: [], hips: null };
+    this.physicsWorld = null;
+    this.gravityTilted = false;
     this.rig = null;
     this.rigBones = [];
     this.rigRest.clear();
@@ -418,7 +436,10 @@ export class CharacterController {
 
   /** A click on the model: a quick reaction right away (the line, if any, comes from main a moment later). */
   touch(part: TouchPart, side: 1 | -1 = 1): void {
-    if (this.state === 'sleeping') return;
+    if (this.state === 'sleeping') {
+      this.gestures.push({ g: stirGesture(side), t: 0 });
+      return;
+    }
     this.gestures.push({ g: touchGesture(part, side), t: 0 });
     const react: Record<TouchPart, [Emotion, number, number]> = {
       // being patted on the head: eyes close happily, a bit shy at low affinity
@@ -434,6 +455,35 @@ export class CharacterController {
     this.emoHoldUntil = this.time + hold;
     // a hand that was touched waves back a little
     if (part === 'hand' && this.state === 'idle' && this.rig) this.talkG = { kind: 'wave', start: this.time, side, until: this.time + 1.6 };
+  }
+
+  /** The user came back to the PC: wake up (with a stretch if she had dozed off). */
+  wake(asleep: boolean): void {
+    this.sleepy = 0;
+    if (this.state === 'sleeping') return;
+    this.gestures.push({ g: wakeGesture(asleep, Math.random() < 0.5 ? 1 : -1), t: 0 });
+    this.setEmotion(asleep ? 'shy' : 'happy', 0.5);
+    this.emoHoldUntil = this.time + 1.5;
+  }
+
+  /** The window is being dragged by (dx, dy) screen px: she is picked up and carried. */
+  carried(dx: number, dy: number): void {
+    this.carry.push(dx, dy);
+    if (this.held || this.state === 'sleeping') return;
+    this.held = true;
+    this.setEmotion('surprised', 0.7);
+    this.emoHoldUntil = Number.POSITIVE_INFINITY;
+    if (this.rig) this.talkG = { kind: 'flail', start: this.time, side: 1, until: Number.POSITIVE_INFINITY };
+  }
+
+  /** Put down: a little landing, then back to normal. */
+  putDown(): void {
+    if (!this.held) return;
+    this.held = false;
+    if (this.talkG?.kind === 'flail') this.talkG.until = this.time;
+    this.gestures.push({ g: landGesture(), t: 0 });
+    this.setEmotion('troubled', 0.4);
+    this.emoHoldUntil = this.time + 1.2;
   }
 
   /** Being stroked on the head (true while it lasts). */
@@ -507,6 +557,7 @@ export class CharacterController {
       this.lastFrame = now;
       const dt = Math.min(0.1, this.clock.getDelta());
       this.renderFrame(dt);
+      this.onFrame?.(this.time);
     };
     this.loop = loop;
     if (!this.hidden) this.raf = requestAnimationFrame(loop);
@@ -559,10 +610,20 @@ export class CharacterController {
     }
     pose = addPose(pose, this.stateFade.update(dt));
     // idle fidgets (look around, tilt, stretch…): only while idle, awake and not already moving
-    const fidget = this.fidgeter.update(t, this.live, this.state === 'idle' && this.sleepy < 0.3 && this.gestures.length === 0 && e.level < 0.05);
+    const fidget = this.fidgeter.update(t, this.live, this.state === 'idle' && this.sleepy < 0.3 && this.gestures.length === 0 && e.level < 0.05, () => new Date().getHours());
     if (fidget) this.gestures.push({ g: fidget, t: 0 });
     this.gestures = this.gestures.filter((g) => (g.t += dt) < g.g.duration);
-    for (const g of this.gestures) pose = addPose(pose, g.g.pose(g.t));
+    // a gesture can also close the eyes / open the mouth (a yawn, nodding off, a sneeze)
+    let gEyes = 0;
+    let gMouth = 0;
+    for (const g of this.gestures) {
+      pose = addPose(pose, g.g.pose(g.t));
+      const f = g.g.face?.(g.t);
+      if (f) {
+        gEyes = Math.max(gEyes, f.eyes);
+        gMouth = Math.max(gMouth, f.mouth);
+      }
+    }
     // talking gesture: body part here, the arms below (after the mixer). Gesture changes cross-fade.
     this.breathe = Math.sin((t / 4) * Math.PI * 2) * 0.01;
     if (this.talkG && (t > this.talkG.until || this.state === 'sleeping')) this.talkG = null;
@@ -575,7 +636,12 @@ export class CharacterController {
     pose = addPose(pose, talk.body);
     if (this.sleepy > 0 && this.state !== 'sleeping') {
       pose.head[0] += 0.12 * this.sleepy * (0.6 + 0.4 * Math.sin(t * 0.8));
+      // dozed off waiting: the deep breathing of sleep
+      if (this.sleepy >= 0.9) pose = addPose(pose, sleepBreath(t), (this.sleepy - 0.9) * 10);
     }
+    this.carry.update(dt);
+    this.carryAmt = Math.min(1, Math.max(0, this.carryAmt + (this.held ? dt / 0.3 : -dt / 0.6)));
+    if (this.carryAmt > 0) pose = addPose(pose, carryPose(this.carry.vx, this.carry.vy), smootherstep(this.carryAmt));
     this.patAmt = Math.min(1, Math.max(0, this.patAmt + (this.patting ? dt / 0.5 : -dt / 0.7)));
     if (this.patAmt > 0) pose = addPose(pose, patPose(t), smootherstep(this.patAmt));
 
@@ -608,9 +674,10 @@ export class CharacterController {
     const gz = distributeGaze(this.gaze.x, this.gaze.y);
 
     // ---- face ----
-    const blink = this.state === 'sleeping' || this.sleepy >= 1 ? 1 : this.blinker.update(t, this.sleepy);
-    const mouth = this.mouthSource?.() ?? ZERO_MOUTH;
-    const speaking = this.state === 'speaking' || Object.values(mouth).some((v) => v > 0.01);
+    const blink = this.state === 'sleeping' || this.sleepy >= 1 ? 1 : Math.max(gEyes, this.blinker.update(t, this.sleepy));
+    const spoken = this.mouthSource?.() ?? ZERO_MOUTH;
+    const mouth = gMouth > 0 ? { ...spoken, a: Math.max(spoken.a, gMouth) } : spoken;
+    const speaking = this.state === 'speaking' || Object.values(spoken).some((v) => v > 0.01);
     // mood lifts the resting face a little (spec 4.1)
     const baseline = this.state === 'idle' && e.cur === 'neutral' && this.mood > 0.3 ? (this.mood - 0.3) * 0.3 : 0;
 
@@ -692,11 +759,26 @@ export class CharacterController {
 
     this.mesh.updateMatrixWorld(true);
     if (this.physicsOn) {
+      this.tiltGravity();
       const obj = (this.helper as unknown as { objects: WeakMap<object, { physics?: { update(dt: number): void } }> }).objects.get(this.mesh);
       // at low frame rates one frame is longer than the physics can simulate in one call (≤3 × 1/65 s):
       // step in pieces so hair and skirts keep up with the body instead of lagging and snapping
       for (const step of physicsSteps(dt)) obj?.physics?.update(step);
     }
+  }
+
+  /** Add the pull of the moving window to the physics gravity, so hair and skirt swing when she is carried. */
+  private tiltGravity(): void {
+    if (!this.physicsWorld) return;
+    if (this.carry.still && !this.gravityTilted) return; // nothing to do while the window stands still
+    const Ammo = (globalThis as unknown as { Ammo?: { btVector3: new () => { setValue(x: number, y: number, z: number): void } } }).Ammo;
+    if (!Ammo) return;
+    this.gravityVec ??= new Ammo.btVector3();
+    const worldPerPx = (this.modelHeight * 1.1) / Math.max(1, this.viewSize.height);
+    const [gx, gy] = this.carry.still ? [0, 0] : inertialGravity(this.carry.ax, this.carry.ay, worldPerPx, GRAVITY * 1.2);
+    this.gravityVec.setValue(gx, -GRAVITY + gy, 0);
+    this.physicsWorld.setGravity(this.gravityVec);
+    this.gravityTilted = !this.carry.still;
   }
 
   dispose(): void {

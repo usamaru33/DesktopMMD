@@ -1,11 +1,12 @@
-// What the character says when touched (FR-EX-05). No conversation turn: a short line picked by part,
-// affinity stage and recent touches, spoken through the voice pipeline only. Pure; no Electron.
+// Short fixed lines (no conversation turn, no LLM at the moment of speaking): what the character says when
+// touched (FR-EX-05), when the user comes back, and when poked awake. Picked by scene, affinity stage and
+// recent lines, spoken through the voice pipeline only. Pure; no Electron.
 import { createHash } from 'node:crypto';
 import { EMOTIONS, type Emotion } from '@shared/emotions';
 import type { TouchKind, TouchPart } from '@shared/types';
 
-export type TouchKey = TouchPart | 'head_pat' | 'many';
-export const TOUCH_KEYS: TouchKey[] = ['head_pat', 'head', 'cheek', 'hand', 'shoulder', 'body', 'legs', 'many'];
+export type TouchKey = TouchPart | 'head_pat' | 'many' | 'lift' | 'welcome' | 'welcome_sleepy' | 'sleep_poke';
+export const TOUCH_KEYS: TouchKey[] = ['head_pat', 'head', 'cheek', 'hand', 'shoulder', 'body', 'legs', 'many', 'lift', 'welcome', 'welcome_sleepy', 'sleep_poke'];
 
 export interface TouchLine {
   emotion: Emotion;
@@ -29,6 +30,10 @@ export const DEFAULT_TOUCH_LINES: TouchLineSet = {
     body: [L('surprised', 0.7, 'ひゃっ、くすぐったいです！'), L('troubled', 0.5, 'わわ、びっくりしました。'), L('surprised', 0.6, 'ど、どうしました？')],
     legs: [L('shy', 0.8, 'そ、そこはちょっと……恥ずかしいです。'), L('troubled', 0.6, 'ええと、そこはだめです……。'), L('shy', 0.7, 'もう、どこを触ってるんですか……。')],
     many: [L('troubled', 0.6, 'もう、そんなにつつかないでください。'), L('angry', 0.4, 'むー、遊んでますね？'), L('troubled', 0.6, 'くすぐったいですってば。')],
+    lift: [L('surprised', 0.8, 'わっ、わわっ！？'), L('surprised', 0.7, 'ひゃっ、浮いてます！'), L('troubled', 0.6, 'ど、どこへ連れていくんですか？')],
+    welcome: [L('happy', 0.7, 'おかえりなさい。'), L('happy', 0.6, 'あ、おかえりなさい。待ってました。'), L('happy', 0.6, 'おかえりなさい。続き、がんばりましょうね。')],
+    welcome_sleepy: [L('shy', 0.6, 'ふぁ……あ、おかえりなさい。ちょっと寝ちゃってました。'), L('surprised', 0.5, 'はっ……！お、おかえりなさい。'), L('shy', 0.6, 'んん……おかえりなさい。うとうとしてました。')],
+    sleep_poke: [L('neutral', 0.4, 'むにゃ……あと五分……。'), L('troubled', 0.4, 'んん……まだ眠いです……。'), L('neutral', 0.4, 'すぅ……すぅ……。')],
   },
   close: {
     head_pat: [L('happy', 0.8, 'えへへ、もっと撫でて。'), L('happy', 0.7, 'ん……気持ちいい。'), L('shy', 0.6, '撫でてもらうの、好きだな。')],
@@ -39,6 +44,10 @@ export const DEFAULT_TOUCH_LINES: TouchLineSet = {
     body: [L('surprised', 0.7, 'ひゃっ、くすぐったい！'), L('surprised', 0.6, 'わっ、びっくりした。'), L('troubled', 0.5, 'こら、くすぐらないの。')],
     legs: [L('shy', 0.8, 'ちょ、ちょっと、そこはだめ！'), L('shy', 0.7, 'もう、どこ触ってるの……。'), L('troubled', 0.6, 'そこは恥ずかしいってば……。')],
     many: [L('angry', 0.4, 'もー、遊んでるでしょ。'), L('troubled', 0.6, 'つつきすぎ！'), L('happy', 0.5, 'はいはい、ここにいるよ。')],
+    lift: [L('surprised', 0.8, 'わわっ、急に持ち上げないでよー！'), L('happy', 0.6, 'わーい、お散歩？'), L('surprised', 0.7, 'ひゃっ、どこ行くの？')],
+    welcome: [L('happy', 0.8, 'おかえり！'), L('happy', 0.7, 'あ、おかえり。待ってたよ。'), L('happy', 0.7, 'おかえり。さ、続きやろっか。')],
+    welcome_sleepy: [L('shy', 0.6, 'ふぁ……おかえり。ちょっと寝ちゃってた。'), L('surprised', 0.6, 'はっ……！お、おかえり！'), L('shy', 0.6, 'ん……おかえり。待ってたら眠くなっちゃった。')],
+    sleep_poke: [L('neutral', 0.4, 'むにゃ……あと五分……。'), L('shy', 0.4, 'ん……なあに……？'), L('neutral', 0.4, 'すぅ……すぅ……。')],
   },
 };
 
@@ -57,9 +66,10 @@ export class TouchReactor {
 
   constructor(private readonly rng: () => number = Math.random) {}
 
-  react(part: TouchPart, kind: TouchKind, stage: number, lines: TouchLineSet, now: number): TouchLine | null {
-    let key: TouchKey = kind === 'pat' ? 'head_pat' : part;
-    if (kind === 'tap') {
+  /** A touch. asleep: she is sleeping, so any touch only gets a sleepy mumble. */
+  react(part: TouchPart, kind: TouchKind, stage: number, lines: TouchLineSet, now: number, asleep = false): TouchLine | null {
+    let key: TouchKey = asleep ? 'sleep_poke' : kind === 'pat' ? 'head_pat' : kind === 'lift' ? 'lift' : part;
+    if (kind === 'tap' && !asleep) {
       this.taps = this.taps.filter((t) => now - t < TOUCH_MANY_WINDOW_MS);
       this.taps.push(now);
       if (this.taps.length >= TOUCH_MANY_TAPS) {
@@ -71,6 +81,12 @@ export class TouchReactor {
     // any line: a short gap; stroking on and on: a longer gap between its own lines
     if (now - this.lastSpoken < TOUCH_TAP_COOLDOWN_MS) return null;
     if (kind === 'pat' && now - this.lastPat < TOUCH_PAT_COOLDOWN_MS) return null;
+    if (kind === 'pat') this.lastPat = now;
+    return this.pick(key, stage, lines, now);
+  }
+
+  /** A line for a scene, right now (no cooldown): avoids the last ones said for that scene. */
+  pick(key: TouchKey, stage: number, lines: TouchLineSet, now: number): TouchLine {
     const group = stage >= 2 ? 'close' : 'polite';
     const pool = lines[group][key]?.length ? lines[group][key] : DEFAULT_TOUCH_LINES[group][key];
     const id = `${group}.${key}`;
@@ -80,7 +96,6 @@ export class TouchReactor {
     const line = from[Math.floor(this.rng() * from.length) % from.length];
     this.recent.set(id, [...used, line.text].slice(-Math.max(1, Math.min(2, pool.length - 1))));
     this.lastSpoken = now;
-    if (kind === 'pat') this.lastPat = now;
     return line;
   }
 }
@@ -96,9 +111,13 @@ const KEY_DESC: Record<TouchKey, string> = {
   body: 'お腹や体をつつかれた',
   legs: '脚やスカートのあたりを触られた（恥ずかしがる・やんわり断る。性的な表現はしない）',
   many: '短い間に何度もつつかれた（少し困る・すねる）',
+  lift: 'マウスでつまみ上げられて、宙に浮いたまま運ばれ始めた（慌てる・驚く）',
+  welcome: 'ユーザーが席を外していて、戻ってきた（うれしそうに迎える。待たされたと責めない）',
+  welcome_sleepy: '待っている間にうたた寝していて、ユーザーが戻ってきて目が覚めた（寝ぼけ・照れ）',
+  sleep_poke: '眠っているときにつつかれた（寝言・寝ぼけたつぶやき。起きない）',
 };
 
-export const TOUCH_LINES_SYSTEM = `あなたはキャラクターのセリフを書く係です。デスクトップに住んでいる3Dのキャラクターが、ユーザーにマウスで触られた瞬間に思わず口にする、短いひとことを書いてください。
+export const TOUCH_LINES_SYSTEM = `あなたはキャラクターのセリフを書く係です。デスクトップに住んでいる3Dのキャラクターが、ユーザーにマウスで触られたときや、席を外していたユーザーが戻ってきたときなどに、思わず口にする短いひとことを書いてください。
 - その瞬間の反応そのものを書く。何をされたかを説明しない。
   良い例: 「ひゃっ、くすぐったいです！」「えへへ、もっと撫でて」「そ、そこはだめです……」「むー、遊んでますね？」
   悪い例: 「ほっぺをつつかれて、少し困っています」「頭を撫でてくださって、ありがとうございます」
@@ -133,7 +152,7 @@ export const TOUCH_LINES_SCHEMA = {
 };
 
 /** Bump when the prompt or the scenes change, so cached lines are made again. */
-const TOUCH_LINES_VERSION = 2;
+const TOUCH_LINES_VERSION = 4;
 
 export function touchLinesKey(personaText: string): string {
   return createHash('sha256').update(`${TOUCH_LINES_VERSION}\n${personaText}`).digest('hex').slice(0, 16);
@@ -172,7 +191,8 @@ export function sanitizeTouchLines(raw: unknown): TouchLineSet | null {
   }
   if (!good) return null;
   // a weak model tends to answer every scene alike in a flat voice: keep the defaults rather than that
-  const all = (['polite', 'close'] as const).flatMap((g) => TOUCH_KEYS.flatMap((k) => out[g][k]));
+  // (sleep talk is allowed to be flat)
+  const all = (['polite', 'close'] as const).flatMap((g) => TOUCH_KEYS.filter((k) => k !== 'sleep_poke').flatMap((k) => out[g][k]));
   const neutral = all.filter((l) => l.emotion === 'neutral').length;
   const endings = new Set(all.map((l) => l.text.slice(-6)));
   if (neutral > all.length * 0.4 || endings.size < all.length * 0.5) return null;

@@ -36,6 +36,8 @@ export class OverlayUI {
   private bubbleText: HTMLElement;
   private bubbleMore: HTMLButtonElement;
   private status: HTMLElement;
+  /** floating "z z z" beside the head while she sleeps */
+  private zzz: HTMLElement;
   private inputBar: HTMLElement;
   private input: HTMLTextAreaElement;
   private approval: HTMLElement;
@@ -62,6 +64,8 @@ export class OverlayUI {
     this.status = el('div', 'status-chip');
     this.status.dataset.ui = '';
     this.root.appendChild(this.status);
+    this.zzz = el('div', 'zzz hidden', '<span>z</span><span>z</span><span>Z</span>');
+    this.root.appendChild(this.zzz);
 
     this.bubble = el('div', 'bubble hidden');
     this.bubble.dataset.ui = '';
@@ -235,12 +239,36 @@ export class OverlayUI {
       this.bubble.style.right = '';
       this.bubble.style.left = '8px';
     }
-    // 状態表示は頭の真上（吹き出しは横にずらしてあるので被らない）
-    this.status.style.top = `${Math.max(4, head.y - 62)}px`;
+    // 状態表示は頭の真上（吹き出しは横にずらしてあるので被らない）。頭ボーンは頭の付け根なので、
+    // 顔に被らないよう頭の大きさ（ウィンドウの高さに比例）ぶん上げる
+    const above = Math.max(62, this.root.clientHeight * 0.1);
+    this.status.style.top = `${Math.max(4, head.y - above)}px`;
     this.status.style.left = `${head.x}px`;
+    // the z's rise from beside the top of the head, on the side away from the bubble
+    this.zzz.style.top = `${Math.max(4, head.y - above - 50)}px`;
+    this.zzz.style.left = `${preferLeft ? head.x + 40 : head.x - 80}px`;
   }
 
   // ---------------- status ----------------
+
+  setAsleep(on: boolean): void {
+    this.zzz.classList.toggle('hidden', !on);
+  }
+
+  /**
+   * Move the z's (call once per drawn frame). Animated here rather than in CSS: a CSS animation would repaint
+   * the transparent window on its own schedule (60/s), while the sleeping character draws only 15 frames/s.
+   */
+  tickZzz(time: number): void {
+    if (this.zzz.classList.contains('hidden')) return;
+    const spans = this.zzz.children;
+    for (let i = 0; i < spans.length; i++) {
+      const u = (((time / 3.6 - i / 3) % 1) + 1) % 1; // each z: 3.6 s, a third apart
+      const el = spans[i] as HTMLElement;
+      el.style.transform = `translate(${(22 * u).toFixed(1)}px, ${(-46 * u).toFixed(1)}px)`;
+      el.style.opacity = (u < 0.15 ? (u / 0.15) * 0.9 : 0.9 * (1 - (u - 0.15) / 0.85)).toFixed(2);
+    }
+  }
 
   setState(s: CharacterState): void {
     this.state = s;

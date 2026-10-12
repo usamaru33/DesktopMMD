@@ -550,8 +550,16 @@ export class TimerRepo {
 
 export class ProactiveRepo {
   constructor(private readonly db: Db) {}
-  add(trigger: string, at: Date): number {
-    return this.db.run('INSERT INTO proactive_events (trigger, fired_at) VALUES (?, ?)', trigger, iso(at)).lastId;
+  add(trigger: string, at: Date, ref: string | null = null): number {
+    return this.db.run('INSERT INTO proactive_events (trigger, fired_at, ref) VALUES (?, ?, ?)', trigger, iso(at), ref).lastId;
+  }
+  /** A one-off line about `ref` was already said. */
+  said(trigger: string, ref: string): boolean {
+    return !!this.db.get('SELECT 1 AS x FROM proactive_events WHERE trigger = ? AND ref = ? LIMIT 1', trigger, ref);
+  }
+  /** The line could not be said after all (the app was busy): let it be tried again. */
+  forgetRef(id: number): void {
+    this.db.run('UPDATE proactive_events SET ref = NULL WHERE id = ?', id);
   }
   setReaction(id: number, reaction: 'replied' | 'ignored' | 'dismissed'): void {
     this.db.run('UPDATE proactive_events SET reaction = ? WHERE id = ?', reaction, id);

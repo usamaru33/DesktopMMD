@@ -45,9 +45,10 @@ export type TalkGestureKind =
   | 'shrug' // 両手を軽く開く（わからない）
   | 'lean_in' // 身を乗り出す（ねえねえ）
   | 'count' // 人差し指を立てる（まず・1つ目）
-  | 'beat'; // 説明しながらの小さな手の動き
+  | 'beat' // 説明しながらの小さな手の動き
+  | 'flail'; // つまみ上げられて慌てる（両腕をばたばた。話す内容では選ばない）
 
-export const TALK_GESTURES: TalkGestureKind[] = ['present', 'self', 'guts', 'think', 'clap', 'wave', 'bow', 'shrug', 'lean_in', 'count', 'beat'];
+export const TALK_GESTURES: TalkGestureKind[] = ['present', 'self', 'guts', 'think', 'clap', 'wave', 'bow', 'shrug', 'lean_in', 'count', 'beat', 'flail'];
 
 const D = Math.PI / 180;
 
@@ -125,6 +126,7 @@ export const HOLD: Record<TalkGestureKind, number> = {
   lean_in: 2.5,
   count: 3.5,
   beat: 1.3,
+  flail: 2.0, // held while being dragged (the controller extends it)
 };
 
 // key arm shapes (right arm). Directions are tuned on short-armed (chibi) and normal-proportion models alike:
@@ -141,6 +143,7 @@ const ARMS = {
   shrug: { upper: norm([-0.42, -0.9, 0.12]), fore: norm([-0.6, 0.06, 0.8]), palm: norm([0, 1, 0.1]), wrist: -0.2, curl: 0.15 },
   countUp: { upper: norm([-0.3, -0.93, 0.22]), fore: norm([-0.12, 0.9, 0.42]), palm: norm([0.1, 0.1, 1]), curl: 1, index: 0, thumb: 0.9 },
   beat: { upper: norm([-0.38, -0.88, 0.28]), fore: norm([-0.25, -0.08, 0.96]), palm: norm([0.2, 0.9, 0.3]), wrist: -0.1, curl: 0.2 },
+  flail: { upper: norm([-0.72, -0.62, 0.3]), fore: norm([-0.55, 0.45, 0.7]), palm: norm([0, 0.2, 1]), curl: 0.1 },
 } satisfies Record<string, ArmTarget>;
 
 /**
@@ -243,6 +246,14 @@ export function talkPose(kind: TalkGestureKind, t: number, side: 1 | -1 = 1, sca
       right = { ...ARMS.beat, fore: lerp3(ARMS.beat.fore, [-0.3, 0.12, 0.95], beat) };
       body.upper[1] = -3 * D * k;
       body.head[0] = 2.5 * D * k * beat;
+      break;
+    }
+    case 'flail': {
+      // both forearms flap, out of step with each other
+      const a = Math.sin(t * Math.PI * 2 * 2.2);
+      const b = Math.sin(t * Math.PI * 2 * 2.2 + 2.1);
+      right = { ...ARMS.flail, fore: lerp3(ARMS.flail.fore, [-0.75, -0.1, 0.65], 0.5 + 0.5 * a) };
+      left = mirror({ ...ARMS.flail, fore: lerp3(ARMS.flail.fore, [-0.75, -0.1, 0.65], 0.5 + 0.5 * b) });
       break;
     }
   }

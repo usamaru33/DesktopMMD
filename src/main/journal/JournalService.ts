@@ -30,6 +30,8 @@ export interface JournalDeps {
   fs: JournalFs;
   toast(text: string, kind?: 'info' | 'warn' | 'error'): void;
   log: Logger;
+  /** the character, for a closing word in its own voice (none = no closing word) */
+  character?(): { name: string; persona: string } | null;
 }
 
 const RETRY_AFTER_FAILURE_MS = 30 * 60_000;
@@ -148,6 +150,7 @@ export class JournalService {
       works: this.d.store.toolRuns.executedBetween(a, b).map((r) => this.d.toolTitle(r.tool)),
       memories: this.d.store.memories.createdBetween(a, b).map((m) => stripReplyMarkup(m.content)),
       tomorrow: this.d.store.memories.schedulesDueBetween(to.toISOString(), tomorrowTo.toISOString()).map((m) => stripReplyMarkup(m.content)),
+      character: this.d.character?.() ?? undefined,
     };
   }
 }

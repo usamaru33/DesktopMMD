@@ -1,7 +1,7 @@
 // 動きの活発さ (renderer/character/character/motion.ts).
 import { describe, expect, it } from 'vitest';
 import {
-  FIDGETS, Fidgeter, fidgetGesture, idlePose, LIVELINESS, speakingPose, ZERO_POSE, type Pose,
+  FIDGETS, Fidgeter, fidgetGesture, fidgetWeights, idlePose, LIVELINESS, speakingPose, ZERO_POSE, type Pose,
 } from '../../src/renderer/character/character/motion';
 
 const mag = (p: Pose) => Math.max(...p.upper.map(Math.abs), ...p.neck.map(Math.abs), ...p.head.map(Math.abs), Math.abs(p.rootY));
@@ -63,6 +63,41 @@ describe('fidgets', () => {
     }
     for (let k = 1; k < kinds.length; k++) expect(kinds[k] === kinds[k - 1] && kinds[k] !== 0).toBe(false);
     expect(new Fidgeter(rng, 0).update(1000, LIVELINESS.calm, true)).toBeNull();
+  });
+
+  it('yawning, nodding off and sneezing close the eyes / open the mouth, and only in between', () => {
+    for (const kind of ['yawn', 'nod_off', 'sneeze'] as const) {
+      const g = fidgetGesture(kind);
+      expect(g.face).toBeDefined();
+      expect(g.face!(0)).toEqual({ eyes: 0, mouth: 0 });
+      const end = g.face!(g.duration);
+      expect(end.eyes + end.mouth).toBeLessThan(1e-6);
+      let eyes = 0;
+      for (let t = 0; t < g.duration; t += 0.05) eyes = Math.max(eyes, g.face!(t).eyes);
+      expect(eyes).toBeGreaterThan(0.8);
+    }
+    expect(fidgetGesture('yawn').face!(1.5).mouth).toBeGreaterThan(0.8);
+  });
+
+  it('the hour shapes the fidgets: drowsy late at night, a rare sneeze any time', () => {
+    const night = fidgetWeights(23);
+    expect(night.nod_off).toBeGreaterThan(night.hum);
+    expect(fidgetWeights(7).yawn).toBeGreaterThan(fidgetWeights(11).yawn);
+    expect(fidgetWeights(11).nod_off).toBe(0);
+    for (const h of [0, 7, 11, 14, 19, 23]) expect(fidgetWeights(h).sneeze).toBeGreaterThan(0);
+    // over many picks at night, nodding off is the most common
+    let i = 0;
+    const rng = () => ((i = (i * 9301 + 49297) % 233280) / 233280);
+    const f = new Fidgeter(rng, 0);
+    const n: Record<string, number> = {};
+    let t = 10;
+    for (let k = 0; k < 400; k++, t += 20) {
+      const g = f.update(t, LIVELINESS.lively, true, () => 23);
+      const kind = FIDGETS.find((x) => fidgetGesture(x).duration === g!.duration)!;
+      n[kind] = (n[kind] ?? 0) + 1;
+    }
+    expect(Object.entries(n).sort((a, b) => b[1] - a[1])[0][0]).toBe('nod_off');
+    expect(n.perk ?? 0).toBeLessThan(n.nod_off);
   });
 
   it('Fidgeter is postponed while the character is busy', () => {

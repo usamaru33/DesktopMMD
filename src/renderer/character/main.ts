@@ -18,13 +18,15 @@ const character = new CharacterController(canvas);
 character.start();
 
 let state: CharacterState = 'idle';
+let sleepy = 0;
 const sentenceText = new Map<number, string>();
 
 const player = new AudioPlayer({
   onStart: (p) => {
     if (!p.preview) bridge.send(C2M.speechPlayed, { sentenceId: p.sentenceId, phase: 'start' });
     character.setEmotion(p.emotion, p.intensity);
-    if (p.preview) character.setState('speaking');
+    // (a sleep-talk mumble keeps her asleep: eyes closed, only the mouth moves)
+    if (p.preview && state !== 'sleeping') character.setState('speaking');
     else character.talk(sentenceText.get(p.sentenceId) ?? '', p.emotion);
   },
   onEnd: (p) => {
@@ -55,6 +57,8 @@ const ui = new OverlayUI(app, {
   },
   openLink: (url) => window.open(url, '_blank'),
 });
+// overlay animations (the sleeping z's) move in step with the drawn frames
+character.onFrame = (t) => ui.tickZzz(t);
 
 // ---------------- bridge events ----------------
 
@@ -70,6 +74,7 @@ bridge.on(M2C.state, (s) => {
   state = s;
   if (!player.playing || s !== 'idle') character.setState(s);
   ui.setState(s);
+  ui.setAsleep(s === 'sleeping' || sleepy >= 1);
   if (s === 'idle') ui.scheduleBubbleHide();
   if (s === 'listening' || s === 'thinking') ui.hideApproval();
 });
@@ -114,7 +119,16 @@ bridge.on(M2C.openInput, () => {
 bridge.on(M2C.status, (st) => ui.setServiceStatus(st));
 bridge.on(M2C.toast, (t) => ui.toast(t.text, t.kind));
 bridge.on(M2C.mood, (m) => character.setMood(m));
-bridge.on(M2C.sleepy, (s) => character.setSleepy(s));
+bridge.on(M2C.sleepy, (s) => {
+  sleepy = s;
+  character.setSleepy(s);
+  ui.setAsleep(state === 'sleeping' || s >= 1);
+});
+bridge.on(M2C.wake, (w) => {
+  sleepy = 0;
+  character.wake(w.asleep);
+  ui.setAsleep(state === 'sleeping');
+});
 bridge.on(M2C.visible, (v) => character.setVisible(v));
 bridge.on(M2C.listening, (l) => ui.setMicSpeech(l.speech));
 bridge.on(M2C.micCapture, (on) => {
@@ -183,8 +197,14 @@ window.addEventListener('mousemove', async (e) => {
     if (dx || dy) {
       drag.lx = e.screenX;
       drag.ly = e.screenY;
-      if (Math.abs(e.screenX - drag.sx) + Math.abs(e.screenY - drag.sy) > 4) drag.moved = true;
-      if (drag.moved) bridge.send(C2M.drag, { dx, dy });
+      if (!drag.moved && Math.abs(e.screenX - drag.sx) + Math.abs(e.screenY - drag.sy) > 4) {
+        drag.moved = true;
+        bridge.send(C2M.touch, { part: 'body', kind: 'lift' });
+      }
+      if (drag.moved) {
+        bridge.send(C2M.drag, { dx, dy });
+        character.carried(dx, dy);
+      }
     }
     return;
   }
@@ -217,6 +237,7 @@ window.addEventListener('mouseup', (e) => {
   drag = null;
   if (d.moved) {
     bridge.send(C2M.dragEnd, undefined);
+    character.putDown();
     return;
   }
   // a click: the reaction depends on where (FR-EX-05)

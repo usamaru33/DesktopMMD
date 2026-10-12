@@ -164,6 +164,8 @@ python scripts/make-icon.py  # アイコン（build/icon.ico）を作り直す�
 - 素材: `ConversationRepo.messagesBetween`（`no_memory` のセッションと `source='proactive'` を除く）、`ToolRunRepo.executedBetween`（実行された作業のみ。拒否・ブロックは含めない）、`MemoryRepo.createdBetween` / `schedulesDueBetween`。LLM へは `purpose: 'journal'` の `text()`（`RoutingLlm` により、APIキーがあればClaude、無ければローカル）。
 - 安全: 書くのはアプリで、モデルはパスを決めない。保存先は `PathGuard.check` で許可フォルダ内を確認（フォルダ作成の前と後の2回。ジャンクションで外に出られないように）。同名のファイルは、先頭が `generated-by: DesktopMMD` のマーカーなら再生成してよく、無ければ上書きせず `-2` … に回す。会話本文は `<conversation>` などのタグで囲み、本文中の同名タグは取り除く（データの中の指示に従わない）。ログに日記の内容は出さない。
 
+- 日記の最後に、キャラクターの口調の一言（見出し「〇〇より」）を入れる。`JournalDeps.character()` が名前と人格ブロック（会話と同じもの）を渡し、`<character>` として送る。モデルが感情タグを写すことがあるので `cleanJournalBody` で取り除く。
+
 ## 標準の感情モーション
 
 - `src/main/character/defaultMotions.ts` が、起動時に `%APPDATA%\mmd-assistant\default-motions\<感情>.vmd` を書き出す（コードで作る自前の動きなので、第三者のモーションは含まない。`*.vmd` をコミット・同梱しない方針のまま）。
@@ -174,6 +176,7 @@ python scripts/make-icon.py  # アイコン（build/icon.ico）を作り直す�
 ## 動きの活発さとおやすみ中の描画
 
 - 設定 `render.liveliness`（`calm` / `normal` / `lively`、既定 `normal`）。中身は `motion.ts` の `LIVELINESS`: 呼吸・揺れの振幅（呼吸は √ で控えめに）、手持ちぶさたの仕草（`fidgetGesture`: 見回す・かしげる・伸び・リズム・重心移動・ぴょこっと）の間隔、話しながらのうなずき（`speakingPose`）、手続き的な感情の仕草の大きさ、よそ見の頻度、アイドルVMDの間隔。`normal` の呼吸・揺れは従来と同じ値（テストで固定）。
+- 手持ちぶさたの仕草は `fidgetWeights(hour)` の重みで選ぶ（1日のリズム）: 5〜10時はあくび・伸び、13〜15時はあくびと舟こぎ、22〜5時は舟こぎ・あくびが多く元気な仕草は減る。くしゃみはいつでも低確率。`Gesture.face`（目を閉じる・口「あ」を開ける）で、あくび・舟こぎ・くしゃみの顔も出す（まばたき・口パクと max で合成）。
 - 仕草は `Fidgeter` が、待機中・起きている・他の動きが無いときだけ出す。話し終わった直後には出さない（忙しい間は先送り）。同じ仕草は続けない。動かすのは上半身・首・頭・全体の上下だけ（腕や足は触らない）。
 - `lively` で感情のVMDがあるときは、VMDに小さめの手続き的な仕草を重ねる。
 - おやすみ中が「重い」と感じられた原因: 描画を 5fps に落としていたうえ、1フレームの時間を 0.1 秒で打ち切っていたので動きが半分の速さになり、さらに MMD の物理は1回の更新で最大 3×1/65 秒しか進まないため、0.2 秒ごとの描画では髪やスカートが骨格に取り残されて引っ張られていた。いまは `frameRateFor`（おやすみ中は設定値と 15fps の小さい方）と `physicsSteps`（長いフレームは物理を ≤3/65 秒ずつに分けて進める）。
@@ -195,6 +198,19 @@ python scripts/make-icon.py  # アイコン（build/icon.ico）を作り直す�
 - main（`main/character/touchLines.ts`）の `TouchReactor` がセリフを選ぶ: 部位×親密度（0〜1段階は polite、2以上は close）、直前の2つを避ける、どのセリフも3秒あける、撫でのセリフ同士は9秒あける、8秒に4回つついたら「many」。会話のターンにはせず（履歴にも残らない）、`speech.preview` で合成して `character:touch-line` と `speech:audio`（preview）で送る。待機中だけ話す。
 - キャラ専用のセリフ: `TouchLineLibrary` が人格ブロック（skill.md があればそれ）＋関係性ブロック（段階0と2）を utility モデルに渡して一度だけ作り、人格のハッシュをキーに `<データフォルダ>\cache\touch-lines.json` に保存する（skill.md を変えると作り直す）。使い道は「触ったときのセリフ作り」として記録される。品質チェック（感情が neutral ばかり・同じ言い回しの使い回し・脚や連打で happy）に通らなければ標準のセリフを使う。ローカルAIのみのとき（APIキーなし）は作らない: qwen3 8b/14b では場面を書き分けられず、不適切な組み合わせも出たため。
 - 設定 `render.touchVoice`（既定ON）。OFFでも仕草と表情の反応はする。
+- 同じ仕組み（`TouchReactor.pick` と `TouchLineLibrary`）で、場面 `welcome` / `welcome_sleepy` / `sleep_poke` のセリフも出す（下の「離席と復帰・眠り」）。
+
+## つまみ上げ（ドラッグ中の反応）
+
+- ドラッグが始まると（4px以上動いたら）`character:touch {kind: 'lift'}` で `lift` のセリフ、キャラは `carried(dx, dy)`: 驚いた顔と、腕の身ぶり `flail`（両腕を互い違いにばたばた。会話では選ばない）。離すと `putDown()`: `landGesture`（膝を沈めて小さく弾む）。
+- `carry.ts` の `Carry` がウィンドウの移動量から速度・加速度をなめらかにして出す。速度で上半身を傾け（`carryPose`）、加速度は `inertialGravity` で物理演算の重力に足す（ウィンドウが右へ加速すると髪は左へ流れる。最大で重力の1.2倍）。キャラ自体の位置は動かさない。ウィンドウが止まっている間は重力を触らない（`setGravity` は動いている間とその直後だけ）。
+
+## 離席と復帰・眠り
+
+- `main/proactive/presence.ts` の `PresenceTracker`（純粋）: 無操作5分で離席、そのあと5秒以内に入力があれば復帰。`powerMonitor` の suspend / lock-screen で離席、unlock-screen で復帰。App が `getSystemIdleTime()`（軽いシステムコール）を2秒ごとに見て、眠気（`sleepinessFor`: 10分でうとうと〜30分で眠る）も送る。
+- 復帰したら `character:wake {asleep}`（30分以上なら asleep）を送り、キャラは起きる仕草（`wakeGesture`: 眠っていたら頭を上げて伸び・首振り）。声かけがONで、おやすみモード・集中モードでなく、表示中で待機中なら `welcome`（眠っていたら `welcome_sleepy`）を話す。4時間以上・日付をまたいだ復帰は `ProactiveEngine` の greeting に任せる。
+- 眠っている間にクリックされたら、それを復帰として扱う（`presence.back`）。おやすみモード中のクリックは起こさず、`stirGesture`（身じろぎ）と `sleep_poke` の寝言。寝言の再生中は speaking にせず、目を閉じたまま口だけ動く。
+- 眠っている間（sleeping 状態、または眠気が0.9以上）は `sleepBreath`（約5秒周期の深い呼吸）を足し、オーバーレイに「z z Z」を浮かべる。動きは CSS アニメーションにせず、キャラの描画のたびに `CharacterController.onFrame` → `OverlayUI.tickZzz` で動かす（CSS アニメーションだと透明ウィンドウが毎秒60回描き直され、毎秒15コマのおやすみ中に CPU が約19%→35%に上がった。描画と同じコマで動かすと変更前とほぼ同じ）。
 
 ## モーション同士のつなぎ（補間）
 
@@ -215,6 +231,8 @@ python scripts/make-icon.py  # アイコン（build/icon.ico）を作り直す�
 - 読み込み: 物理エンジン（ammo.wasm）の準備・PMX・VMD を並行して読む（以前は順番待ち）。VMD は `vmdLayer.ts` の `loadVmdClips` がまとめて読む。
 - 構成: VMD の再生（読み込み・開始・受け渡し・終わり際のフェード・腕の受け渡し量）は `VmdLayer` にまとめ、`CharacterController` は層の合成に専念する。使われていない関数・定数は削除し、`tsconfig.base.json` で `noUnusedLocals` / `noUnusedParameters` を有効にした（使われないコードがあると typecheck が落ちる）。
 - 計測: 一時データフォルダ（設定・character.json・skill.md のコピー）で開発版を `--remote-debugging-port` 付きで起動し、DevTools プロトコルで gl.clear の回数（fps）、`Performance.getMetrics`（JS時間）、CPUプロファイルを取り、プロセスごとのCPU時間・ワーキングセットを PowerShell で読む。改善前のビルドは `git worktree` で同じ条件にして比べる。
+
+- 「住んでいる感」の追加（おかえり・寝息・つまみ上げ・時間帯の仕草・記念日など）の前後で、同じ計測（初音ミクVer2、30秒、全 electron プロセスの CPU 合計）: 通常時 26〜28% → 27.5〜28%（誤差の範囲）、おやすみ中 17〜20% → 20〜21.5%。無操作時間の確認（2秒ごと）は軽いシステムコールで、計測では差が出ない。
 
 ## 今後の予定（メモ）
 

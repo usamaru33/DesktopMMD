@@ -29,7 +29,8 @@ import { McpHub } from './mcp/McpHub';
 import { stageOf, STAGES } from './memory/affinity';
 import { MemoryService } from './memory/MemoryService';
 import { Orchestrator } from './orchestrator/Orchestrator';
-import { ActivityMonitor } from './proactive/ActivityMonitor';
+import { ActivityMonitor, AWAY_GAP_SEC } from './proactive/ActivityMonitor';
+import { PresenceTracker, type Returned, sleepinessFor } from './proactive/presence';
 import { FocusService } from './proactive/FocusService';
 import { ProactiveEngine } from './proactive/ProactiveEngine';
 import { TimerService } from './proactive/TimerService';
@@ -50,7 +51,7 @@ import { CharacterStore, deepMerge, Secrets, SettingsStore } from './store/Setti
 import { ApprovalBroker } from './tools/ApprovalBroker';
 import { CharacterSkillService, draftSkillFromTemplate } from './character/CharacterSkillService';
 import { overlaysOf, skillName, skillPersonaBlock, skillRelationshipBlock } from './character/skillPrompt';
-import { TOUCH_LINES_SCHEMA, TOUCH_LINES_SYSTEM, TouchLineLibrary, TouchReactor } from './character/touchLines';
+import { TOUCH_LINES_SCHEMA, TOUCH_LINES_SYSTEM, type TouchLine, TouchLineLibrary, TouchReactor } from './character/touchLines';
 import { personaBlock, relationshipBlock } from './llm/PromptBuilder';
 import { MOTION_EMOTIONS, writeDefaultMotions } from './character/defaultMotions';
 import { CalendarService, formatEvent, validateCalendarUrl } from './calendar/CalendarService';
@@ -115,6 +116,9 @@ export class App {
   private morphReport: C2MPayloads[typeof C2M.morphReport] | null = null;
   private skills!: CharacterSkillService;
   private readonly touchReactor = new TouchReactor();
+  private readonly presence = new PresenceTracker();
+  /** 0..1 drowsiness sent to the character (1 = asleep after 30 min without input) */
+  private sleepiness = 0;
   private touchLines!: TouchLineLibrary;
   /** いま有効なキャラクターのモード（skill.md の overlays）。一時的な切り替えなので保存しない */
   private mode: string | null = null;
@@ -287,6 +291,7 @@ export class App {
       enabled: () => this.s.privacy.saveTranscripts,
       onChanged: () => this.adminWin?.send(M2A.memoryChanged, null),
       onMood: (m) => this.charWin?.send(M2C.mood, m),
+      onStageUp: (stage) => this.proactive?.noteStageUp(stage),
     });
 
     // ---- timers, activity, proactive ----
@@ -327,12 +332,20 @@ export class App {
       this.charWin.setFullscreenHidden(fs);
       if (fs) this.orc.cancel('fullscreen');
     });
-    // spec 4.3 放置反応: drowsy after 10 min without input, asleep at 30 min; any input wakes her up
+    // spec 4.3 放置反応: drowsy after 10 min without input, asleep at 30 min; coming back wakes her up and
+    // gets a "welcome back". The idle time is one cheap system call, so this can poll often enough to greet promptly.
     setInterval(() => {
-      const idleMin = powerMonitor.getSystemIdleTime() / 60;
-      const sleepy = idleMin < 10 ? 0 : idleMin >= 30 ? 1 : 0.3 + ((idleMin - 10) / 20) * 0.6;
-      this.charWin?.send(M2C.sleepy, sleepy);
-    }, 15_000).unref();
+      const idle = powerMonitor.getSystemIdleTime();
+      this.setSleepiness(sleepinessFor(idle));
+      const back = this.presence.update(idle, Date.now());
+      if (back) this.onUserBack(back);
+    }, 2000).unref();
+    powerMonitor.on('suspend', () => this.presence.leave(Date.now()));
+    powerMonitor.on('lock-screen', () => this.presence.leave(Date.now()));
+    powerMonitor.on('unlock-screen', () => {
+      const back = this.presence.back(Date.now());
+      if (back) this.onUserBack(back);
+    });
     this.activity.on('activeMinute', (now: Date, appName: string | null) => {
       // sampled every 10s; count a minute every 6th sample
       if (now.getSeconds() < 10) this.store.patterns.addMinute(localHourKey(now), appName);
@@ -401,6 +414,7 @@ export class App {
       },
       toast: (text, kind) => this.toast(text, kind),
       log: getLogger('journal'),
+      character: () => ({ name: this.displayName(), persona: this.touchPersona() }),
     });
     this.calendar = new CalendarService({
       getUrl: () => this.secrets.getCalendarUrl(),
@@ -550,12 +564,44 @@ export class App {
   /** The renderer already animates the touch; here only a short line, without a conversation turn. */
   private async onTouch(part: TouchPart, kind: TouchKind): Promise<void> {
     log.debug(`touched ${part} (${kind})`);
-    if (!this.s.render.touchVoice || this.s.sleeping || this.orc.state !== 'idle') return;
-    const stage = stageOf(this.store.relationship.get().affinity);
-    const line = this.touchReactor.react(part, kind, stage, this.touchLines.get(this.touchPersona()), Date.now());
-    if (!line) return;
+    // dozed off waiting (no input for a while): the touch is the user coming back
+    const back = this.presence.back(Date.now());
+    if (back) return this.onUserBack(back);
+    // in sleep mode she stays asleep and only mumbles
+    const asleep = this.s.sleeping;
+    if (!this.s.render.touchVoice || this.orc.state !== (asleep ? 'sleeping' : 'idle')) return;
+    const line = this.touchReactor.react(part, kind, this.stage(), this.touchLines.get(this.touchPersona()), Date.now(), asleep);
+    if (line) await this.sayReaction(line, asleep ? 'sleeping' : 'idle');
+  }
+
+  private setSleepiness(v: number): void {
+    if (Math.abs(v - this.sleepiness) < 0.01) return;
+    this.sleepiness = v;
+    this.charWin?.send(M2C.sleepy, v);
+  }
+
+  /** The user is back at the PC after a while: wake up, and say "welcome back" if it's a good moment. */
+  private onUserBack(r: Returned): void {
+    const now = Date.now();
+    log.info(`user back after ${Math.round(r.awayMs / 60_000)} min${r.asleep ? ' (she had dozed off)' : ''}`);
+    this.setSleepiness(0);
+    this.charWin.send(M2C.wake, { asleep: r.asleep });
+    // a long absence or a new day gets the proactive greeting instead
+    const newDay = new Date(now - r.awayMs).toDateString() !== new Date(now).toDateString();
+    if (r.awayMs >= AWAY_GAP_SEC * 1000 || newDay) return;
+    if (!this.s.proactive.enabled || this.s.sleeping || this.focus.active || !this.charWin.visible || this.orc.state !== 'idle') return;
+    const line = this.touchReactor.pick(r.asleep ? 'welcome_sleepy' : 'welcome', this.stage(), this.touchLines.get(this.touchPersona()), now);
+    void this.sayReaction(line, 'idle');
+  }
+
+  private stage(): number {
+    return stageOf(this.store.relationship.get().affinity);
+  }
+
+  /** Speak a fixed line (bubble + voice, no conversation turn), if the character is still in `state`. */
+  private async sayReaction(line: TouchLine, state: 'idle' | 'sleeping'): Promise<void> {
     const audio = this.s.voice.muted ? null : await this.speech.preview(line.text, this.character.voice, line.emotion, line.intensity).catch(() => null);
-    if (this.orc.state !== 'idle') return; // the user started talking meanwhile
+    if (this.orc.state !== state) return; // the user started talking meanwhile
     this.charWin.send(M2C.touchLine, { ...line, silent: !audio });
     if (audio) this.charWin.send(M2C.speechAudio, { turnId: -2, sentenceId: -2, wav: audio.wav, query: audio.query, emotion: line.emotion, intensity: line.intensity, preview: true });
   }

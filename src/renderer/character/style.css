@@ -68,6 +68,30 @@ body.over-model .stage {
 }
 
 /* ---------- status chip ---------- */
+.zzz {
+  position: absolute;
+  width: 40px;
+  height: 60px;
+  pointer-events: none;
+  font: 600 16px/1 system-ui, sans-serif;
+  color: #fff;
+  text-shadow: 0 0 3px rgba(40, 50, 90, 0.8);
+}
+.zzz.hidden {
+  display: none;
+}
+.zzz span {
+  position: absolute;
+  bottom: 0;
+  opacity: 0;
+}
+.zzz span:nth-child(2) {
+  font-size: 19px;
+}
+.zzz span:nth-child(3) {
+  font-size: 23px;
+}
+
 .status-chip {
   position: absolute;
   transform: translateX(-50%);

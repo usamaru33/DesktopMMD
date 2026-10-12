@@ -46,6 +46,26 @@ describe('TouchReactor', () => {
     expect(texts('polite', 'many')).toContain(last!.text);
   });
 
+  it('only mumbles in its sleep, whatever is touched (and never counts it as poking)', () => {
+    const r = new TouchReactor(() => 0);
+    for (let i = 0; i < TOUCH_MANY_TAPS; i++) {
+      const l = r.react('legs', 'tap', 3, lines, i * 10_000, true)!;
+      expect(texts('close', 'sleep_poke')).toContain(l.text);
+    }
+  });
+
+  it('being picked up gets its own line and is not counted as poking', () => {
+    const r = new TouchReactor(() => 0);
+    for (let i = 0; i < TOUCH_MANY_TAPS; i++) expect(texts('polite', 'lift')).toContain(r.react('body', 'lift', 0, lines, i * 10_000)!.text);
+  });
+
+  it('picks welcome-back lines without a cooldown', () => {
+    const r = new TouchReactor(() => 0);
+    r.react('head', 'tap', 0, lines, 0);
+    expect(texts('polite', 'welcome')).toContain(r.pick('welcome', 0, lines, 1).text);
+    expect(texts('close', 'welcome_sleepy')).toContain(r.pick('welcome_sleepy', 2, lines, 2).text);
+  });
+
   it('does not repeat the same line back to back', () => {
     const r = new TouchReactor(() => 0);
     const said = [0, 1, 2].map((i) => r.react('shoulder', 'tap', 0, lines, i * 10_000)!.text);

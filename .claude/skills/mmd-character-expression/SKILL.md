@@ -97,7 +97,7 @@ const EMOTION_MORPHS = {
 - 呼吸: 周期約4秒の sin で `上半身` を X に ±1.2°、全体を Y に ±0.01。
 - 揺れ: `上半身`/`下半身` を Y・Z に振幅1〜2°の低周波（異なる周期を2つ重ねる）。
 - アイドルVMD: 30〜90秒ごとに idle_*.vmd から機嫌（mood）で重み付けして1つ再生。無ければスキップ。
-- 放置: 操作なし10分でうとうと（まぶた半分＋頭ゆっくり前後）、30分で Sleeping。入力で起きる。
+- 放置: 操作なし10分でうとうと（まぶた半分＋頭ゆっくり前後）、30分で Sleeping。入力で起きる。（main の `PresenceTracker` が2秒ごとに判定し、復帰で `character:wake` → `wakeGesture`＋「おかえり」。眠っている間は `sleepBreath` と「z z Z」。詳しくは DEVELOPMENT.md「離席と復帰・眠り」）
 - 乱数・時刻は注入できる形にする（テスト用）。
 - 動きの活発さ（`render.liveliness` → `LIVELINESS`）: 呼吸・揺れの振幅、手持ちぶさたの仕草（`Fidgeter` / `fidgetGesture`、待機中・起きている・他の動きが無いときだけ）、話しながらのうなずき（`speakingPose`）、感情の仕草の大きさ、よそ見の頻度、アイドルVMDの間隔をまとめて変える。`normal` の呼吸・揺れは従来値。
 - 話しながらの身ぶり: `talkGestures.ts`（言葉→身ぶりの選択 `chooseTalkGesture`、腕の目標方向 `talkPose`、方向での補間 `blendArm`）と `armRig.ts`（方向→ボーン回転。ひじは蝶番、手のひらは前腕のねじり、付与ボーンへの足し直し、指の曲げ）。文の再生開始で `talk()`、終了で `endTalk()`。腕のVMDが動いている間は、その重みに応じて弱める。

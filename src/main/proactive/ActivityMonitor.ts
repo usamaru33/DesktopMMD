@@ -21,7 +21,8 @@ export interface ActivityDeps {
   log: Logger;
 }
 
-const AWAY_GAP_SEC = 4 * 3600;
+/** back after this long (or on a new day): the "long time no see" greeting */
+export const AWAY_GAP_SEC = 4 * 3600;
 const BREAK_IDLE_SEC = 5 * 60;
 
 export class ActivityMonitor extends EventEmitter {

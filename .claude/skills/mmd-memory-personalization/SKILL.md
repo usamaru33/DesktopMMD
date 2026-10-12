@@ -77,6 +77,10 @@ cos < 0.35 は除外。上位8件、本文合計 800トークン（文字数/1.5
 | small_talk | 待機60分以上かつ親密度段階3以上 | 3時間 |
 | reminder | set_reminder / set_timer の時刻 | 1回（ユーザー自身が頼んだものなので、全画面と通話中以外の抑止は無視。抑止されたらトーストだけ出す） |
 | focus_end | 集中モード（`FocusService`）の時間切れ | 1回（reminder と同じ扱い。途中で止めたときは出さない） |
+| stage_up | 親密度の段階が上がった（`MemoryService` の `onStageUp` → `noteStageUp`）。次に操作中（無操作2分未満）のとき | 段階ごと1回（ref `stage-N`） |
+| milestone | 出会って100・200・300・500・1000日（`MILESTONE_DAYS`、ローカル日付で数える） | それぞれ1回（ref `day-N`） |
+| birthday | 記憶（schedule・episode 以外）に「誕生日は5月3日」「誕生日: 5/3」があり、今日がその日 | 年1回（ref は年） |
+| follow_up | schedule 記憶の期日が2時間〜7日前（済んだ予定）。新しいものから「その後どうだった？」 | 予定ごと1回（ref `memory-ID`）、全体で6時間に1回 |
 
 抑止（いずれか該当で発火しない、tests/unit/suppression.test.ts）:
 - 全画面アプリ使用中（`ActivityMonitor.isFullscreenWindow`: 前面ウィンドウがディスプレイと±1pxで**一致**し、2回連続で検出されたとき）。最大化ウィンドウは見えない枠で約8pxはみ出すので「以上」で比べると誤検出する。デスクトップ（explorer.exe）などのシェルは get-windows の表示名が日本語版で「エクスプローラー」になるので、**exe のファイル名**で除外する。隠すかどうかは設定 `window.hideOnFullscreen`（OFFで常に表示）
@@ -86,6 +90,8 @@ cos < 0.35 は除外。上位8件、本文合計 800トークン（文字数/1.5
 - 直前10分以内に会話あり
 - 全体で1時間あたり2回まで
 - 無視（30秒以内に反応なし）・拒否（Esc/「今いい」）された種類は再発間隔を2倍（上限24時間）。応答されたら元に戻す。
+
+一度きりの声かけは `proactive_events.ref`（migration 4）で「もう言った」を覚える。発火できなかった（Orchestrator が忙しかった）ときは `forgetRef` で ref を消し、あとで言い直す。
 
 能動トリガーはユーザー入力より優先度が低い。Orchestrator が Idle 以外ならその場で破棄（キューに積まない）。
 

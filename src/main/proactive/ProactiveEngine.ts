@@ -1,5 +1,5 @@
 // Decides when to speak unprompted (spec 5.8). Conditions AND suppression must both pass.
-import type { Settings } from '@shared/types';
+import type { MemoryRecord, Settings } from '@shared/types';
 import type { TurnInput } from '../adapters';
 import type { Store } from '../store/repos';
 import type { Logger } from '../util/logger';
@@ -35,6 +35,8 @@ export class ProactiveEngine {
   private announcedSchedules = new Set<number>();
   private lastChimeSlot = '';
   private announcedCalendar = new Set<string>();
+  /** the relationship just reached this stage (celebrated once, when a good moment comes) */
+  private stageUp: number | null = null;
   private pending: { eventId: number; trigger: TriggerKind; at: number } | null = null;
 
   constructor(private readonly d: ProactiveDeps) {}
@@ -46,6 +48,11 @@ export class ProactiveEngine {
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
+  }
+
+  /** The affinity stage went up (from MemoryService): say something about it at the next good moment. */
+  noteStageUp(stage: number): void {
+    this.stageUp = stage;
   }
 
   /** The user answered (any user turn) → the pending proactive event counts as replied. */
@@ -73,7 +80,7 @@ export class ProactiveEngine {
     const cand = this.candidate(now);
     if (!cand) return;
     await this.d.activity.refreshMicInUse();
-    this.fire(cand.kind, cand.detail, now, cand.scheduleId, cand.calendarKey);
+    this.fire(cand.kind, cand.detail, now, cand.scheduleId, cand.calendarKey, cand.ref);
   }
 
   /** 集中モードが終わった: お疲れさまと休憩の提案（ユーザーが頼んだものなので、ミュート等以外の抑止は受けない） */
@@ -88,7 +95,7 @@ export class ProactiveEngine {
     return this.fire('reminder', label, this.d.now());
   }
 
-  private fire(kind: TriggerKind, detail: string, now: Date, scheduleId?: number, calendarKey?: string): boolean {
+  private fire(kind: TriggerKind, detail: string, now: Date, scheduleId?: number, calendarKey?: string, ref?: string): boolean {
     const s = this.d.settings();
     const hourAgo = new Date(now.getTime() - 3600_000);
     const firedInLastHour = this.d.store.proactive.since(hourAgo).filter((e) => e.trigger !== 'reminder' && e.trigger !== 'chime' && e.trigger !== 'focus_end').length;
@@ -112,12 +119,14 @@ export class ProactiveEngine {
       this.d.log.debug(`proactive ${kind} suppressed: ${reason}`);
       return false;
     }
-    const eventId = this.d.store.proactive.add(kind, now);
+    const eventId = this.d.store.proactive.add(kind, now, ref ?? null);
     const ok = this.d.submit({ kind: 'proactive', trigger: kind, detail, eventId });
     if (!ok) {
       this.d.store.proactive.setReaction(eventId, 'ignored');
+      if (ref) this.d.store.proactive.forgetRef(eventId);
       return false;
     }
+    if (kind === 'stage_up') this.stageUp = null;
     this.lastFired.set(kind, now.getTime());
     if (kind === 'greeting') this.lastGreetingAt = now;
     if (scheduleId) this.announcedSchedules.add(scheduleId);
@@ -135,7 +144,7 @@ export class ProactiveEngine {
     return now.getTime() - last >= effectiveIntervalMin(kind, reactions) * 60_000;
   }
 
-  private candidate(now: Date): { kind: TriggerKind; detail: string; scheduleId?: number; calendarKey?: string } | null {
+  private candidate(now: Date): { kind: TriggerKind; detail: string; scheduleId?: number; calendarKey?: string; ref?: string } | null {
     const s = this.d.settings();
     const act = this.d.activity.state();
 
@@ -178,14 +187,28 @@ export class ProactiveEngine {
       return { kind: 'break', detail: what };
     }
 
-    const stage = stageOf(this.d.store.relationship.get().affinity);
+    const rel = this.d.store.relationship.get();
+    const stage = stageOf(rel.affinity);
+    const said = (kind: TriggerKind, ref: string) => this.d.store.proactive.said(kind, ref);
+    // once-only moments, while the user is at the PC: the relationship deepened, a day count, a birthday
+    if (act.idleSec < 120) {
+      if (this.stageUp !== null && this.stageUp <= stage && !said('stage_up', `stage-${this.stageUp}`)) {
+        return { kind: 'stage_up', detail: STAGE_UP_DETAIL[this.stageUp] ?? '前より打ち解けた', ref: `stage-${this.stageUp}` };
+      }
+      const days = daysSince(new Date(rel.firstMetAt), now);
+      if (MILESTONE_DAYS.includes(days) && !said('milestone', `day-${days}`)) return { kind: 'milestone', detail: `出会って${days}日`, ref: `day-${days}` };
+      const bday = birthdayToday(this.d.store.memories.active(), now);
+      if (bday && !said('birthday', `${now.getFullYear()}`)) return { kind: 'birthday', detail: bday, ref: `${now.getFullYear()}` };
+      const done = followUpCandidate(this.d.store.memories.active(), now, (id) => said('follow_up', `memory-${id}`));
+      if (done && this.due('follow_up', now)) return { kind: 'follow_up', detail: done.detail, ref: `memory-${done.id}` };
+    }
+
     const last = this.d.lastConversationAt();
     if (stage >= 2 && act.idleSec < 120 && last && now.getTime() - last.getTime() >= 60 * 60_000 && this.due('small_talk', now)) {
       // learned pattern: don't start small talk in hours the user is usually away
       if (this.d.store.patterns.activityRate(now.getHours(), 14, now) >= 0.3) return { kind: 'small_talk', detail: '話題は自由' };
     }
 
-    const rel = this.d.store.relationship.get();
     if (stage >= 3 && this.due('anniversary', now)) {
       const met = new Date(rel.firstMetAt);
       if (met.getDate() === now.getDate() && (met.getMonth() !== now.getMonth() || met.getFullYear() !== now.getFullYear())) {
@@ -200,3 +223,53 @@ export class ProactiveEngine {
     return 90; // FR-PS-06 extension point: could be raised to 120 from usage_patterns
   }
 }
+
+/** 出会ってからの日数のうち、ひとこと触れる日（1年以上は anniversary が毎月・毎年扱う） */
+export const MILESTONE_DAYS = [100, 200, 300, 500, 1000];
+
+const STAGE_UP_DETAIL: Record<number, string> = {
+  1: '顔なじみになって、少し打ち解けてきた',
+  2: '親しい間柄になった',
+  3: '何でも話せる相棒のような間柄になった',
+};
+
+/** Whole local days from the first meeting to today. */
+export function daysSince(met: Date, now: Date): number {
+  const a = new Date(met.getFullYear(), met.getMonth(), met.getDate()).getTime();
+  const b = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return Math.round((b - a) / 86_400_000);
+}
+
+const DIGITS = (s: string) => Number(s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)));
+
+/** A remembered birthday ("誕生日は5月3日", "誕生日: 5/3") that is today: the memory text, or null. */
+export function birthdayToday(memories: Pick<MemoryRecord, 'kind' | 'content'>[], now: Date): string | null {
+  for (const m of memories) {
+    if (m.kind === 'schedule' || m.kind === 'episode') continue; // someone else's birthday party, etc.
+    const r = /(?:ユーザー|わたし|私|自分|僕|俺)?の?誕生日[^0-9０-９]{0,6}([0-9０-９]{1,2})\s*(?:月|\/)\s*([0-9０-９]{1,2})/.exec(m.content);
+    if (r && DIGITS(r[1]) === now.getMonth() + 1 && DIGITS(r[2]) === now.getDate()) return m.content;
+  }
+  return null;
+}
+
+/**
+ * A schedule the user told us about that is now over (between 2 hours and 7 days ago) and not followed up
+ * yet: "how did the interview go?". The most recent one first.
+ */
+export function followUpCandidate(
+  memories: Pick<MemoryRecord, 'id' | 'kind' | 'content' | 'dueAt'>[],
+  now: Date,
+  alreadyAsked: (id: number) => boolean,
+): { id: number; detail: string } | null {
+  const t = now.getTime();
+  const done = memories
+    .filter((m) => m.kind === 'schedule' && m.dueAt)
+    .map((m) => ({ m, at: Date.parse(m.dueAt!) }))
+    .filter(({ at }) => t - at >= 2 * 3600_000 && t - at <= 7 * 86_400_000)
+    .sort((a, b) => b.at - a.at)
+    .find(({ m }) => !alreadyAsked(m.id));
+  if (!done) return null;
+  const d = new Date(done.at);
+  return { id: done.m.id, detail: `${done.m.content}（${d.getMonth() + 1}月${d.getDate()}日）` };
+}
+

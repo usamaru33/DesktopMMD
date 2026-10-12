@@ -184,4 +184,12 @@ DROP TABLE usage_daily;
 ALTER TABLE usage_daily_v3 RENAME TO usage_daily;
 `,
   },
+  {
+    // what a one-off proactive line was about (a memory, a milestone…), so it is said only once
+    version: 4,
+    sql: `
+ALTER TABLE proactive_events ADD COLUMN ref TEXT;
+CREATE INDEX idx_proactive_ref ON proactive_events(trigger, ref);
+`,
+  },
 ];
