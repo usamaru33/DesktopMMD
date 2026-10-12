@@ -827,6 +827,7 @@ export class App {
       physics: this.s.render.physics,
       gazeLimit: this.s.render.gazeLimit,
       showBubble: this.s.render.showBubble,
+      liveliness: this.s.render.liveliness,
       scale: this.s.window.scale,
       sleeping: this.s.sleeping,
       micEnabled: this.s.voice.micEnabled,
@@ -911,8 +912,11 @@ export class App {
       this.sendCharacter();
       this.charWin.send(M2C.view, this.viewPayload());
       this.charWin.send(M2C.status, this.status);
+      // おやすみモードのまま起動したとき: 状態は設定が変わった瞬間にしか再計算されないので、ここで反映する
+      this.orc.refreshState();
       this.charWin.send(M2C.state, this.orc.state);
       this.charWin.send(M2C.mood, this.store.relationship.get().mood);
+      this.charWin.send(M2C.visible, this.charWin.visible);
     });
     on(C2M.inputText, (text) => {
       const t = String(text ?? '').slice(0, 8000);
@@ -1439,6 +1443,7 @@ function sanitizeSettingsPatch(patch: DeepPartial<Settings>): DeepPartial<Settin
     const g = Number(p.render.gazeLimit);
     p.render.gazeLimit = Number.isFinite(g) ? Math.min(GAZE_LIMIT_RANGE.max, Math.max(GAZE_LIMIT_RANGE.min, Math.round(g))) : GAZE_LIMIT_DEFAULT;
   }
+  if (p.render?.liveliness !== undefined && !['calm', 'normal', 'lively'].includes(p.render.liveliness)) p.render.liveliness = 'normal';
   if (p.render?.fps !== undefined) p.render.fps = Math.min(60, Math.max(10, Math.round(Number(p.render.fps))));
   if (p.ui?.advanced !== undefined) p.ui.advanced = p.ui.advanced === true;
   if (p.tools?.allowedDirs) p.tools.allowedDirs = p.tools.allowedDirs.filter((d): d is string => typeof d === 'string' && d.trim().length > 0);

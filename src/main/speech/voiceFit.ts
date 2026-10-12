@@ -2,9 +2,8 @@
 //   1. 候補のスタイルで短い文を既定値のまま合成し、声色（MFCC）と地声の高さの近さでふるい分ける
 //   2. 上位のスタイルごとに、合成→測定→補正 を繰り返して 話速・音高・抑揚 を合わせる
 //      （同じ解析器で合成音も測るので、解析のくせは両方に同じように乗って打ち消し合う）
-import { clampBase } from './voiceTuning';
 import { analyzeVoice, semitones, timbreDistance, type VoiceFeatures } from './voiceAnalysis';
-import type { FitCandidate, FitParams, VoiceBase } from '@shared/types';
+import type { FitCandidate, FitParams } from '@shared/types';
 
 export type { FitCandidate, FitParams };
 
@@ -179,9 +178,4 @@ export async function autoTune(o: AutoTuneOptions): Promise<FitCandidate[]> {
   check();
   o.onProgress?.({ phase: 'fit', done: top.length, total: top.length, label: '' });
   return out.sort((a, b) => b.score - a.score);
-}
-
-/** 候補を調声の基本値に反映した値（音量・間などは今の値のまま） */
-export function applyFit(base: VoiceBase, p: FitParams): VoiceBase {
-  return clampBase({ ...base, ...p });
 }

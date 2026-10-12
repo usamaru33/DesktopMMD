@@ -1,6 +1,6 @@
 // Procedural motion primitives (spec 4.2 自前動作, 4.3 アイドル, 4.5 視線). Pure math, no three.js.
 import type { Emotion } from '@shared/emotions';
-import type { CharacterState } from '@shared/types';
+import type { CharacterState, Liveliness } from '@shared/types';
 
 /** Additive rotations in radians (x: pitch forward+, y: yaw left+, z: roll) and a root offset. */
 export interface Pose {
@@ -164,13 +164,14 @@ export function statePose(s: CharacterState, time: number, side: 1 | -1): Pose {
   return p;
 }
 
-/** Breathing (≈4 s period) and slow sway (two incommensurate periods), spec 4.3. */
-export function idlePose(time: number, mood: number): Pose {
+/** Breathing (≈4 s period) and slow sway (two incommensurate periods), spec 4.3. amp: liveliness scale. */
+export function idlePose(time: number, mood: number, amp = 1): Pose {
   const p = ZERO_POSE();
   const breath = Math.sin((time / 4) * Math.PI * 2);
-  p.upper[0] = 1.2 * D * breath;
-  p.rootY = 0.01 * breath;
-  const swayAmp = (1 + Math.max(0, mood)) * D; // a happier mood sways a bit more
+  // breathing grows less than the sway: a big breath looks like gasping
+  p.upper[0] = 1.2 * D * breath * Math.sqrt(amp);
+  p.rootY = 0.01 * breath * Math.sqrt(amp);
+  const swayAmp = (1 + Math.max(0, mood)) * D * amp; // a happier mood sways a bit more
   p.upper[1] = swayAmp * 0.6 * Math.sin(time * 0.37) + swayAmp * 0.4 * Math.sin(time * 0.23 + 1.3);
   p.upper[2] = swayAmp * 0.5 * Math.sin(time * 0.29 + 0.7);
   return p;
@@ -256,3 +257,237 @@ export function distributeGaze(yaw: number, pitch: number): { eyes: [number, num
 }
 
 export { bell };
+
+// ---------------- liveliness (動きの活発さ) ----------------
+
+export interface LivelinessProfile {
+  /** idle breathing / sway amplitude */
+  amp: number;
+  /** seconds between idle fidgets [min, max]; null = none */
+  fidgetEvery: [number, number] | null;
+  /** head bob while speaking (0 = still) */
+  speakingBob: number;
+  /** scale of the procedural gestures (above 1 goes a bit beyond the spec amplitudes) */
+  gestureScale: number;
+  /** how often the eyes wander while idle (×) */
+  glance: number;
+  /** seconds between idle VMDs [min, max] */
+  idleVmdEvery: [number, number];
+  /** talking gestures: chance to use one whose words matched, and of a small "beat" on other long sentences */
+  talkMatch: number;
+  talkBeat: number;
+}
+
+export const LIVELINESS: Record<Liveliness, LivelinessProfile> = {
+  calm: { amp: 0.6, fidgetEvery: null, speakingBob: 0, gestureScale: 0.75, glance: 0.6, idleVmdEvery: [45, 120], talkMatch: 0.5, talkBeat: 0 },
+  normal: { amp: 1, fidgetEvery: [40, 90], speakingBob: 0.5, gestureScale: 1, glance: 1, idleVmdEvery: [30, 90], talkMatch: 0.9, talkBeat: 0.3 },
+  lively: { amp: 1.7, fidgetEvery: [7, 18], speakingBob: 1, gestureScale: 1.35, glance: 2, idleVmdEvery: [12, 30], talkMatch: 1, talkBeat: 0.65 },
+};
+
+/** Curve through [time, value] keys, smoothstepped between keys (0 outside). */
+function curve(t: number, keys: readonly (readonly [number, number])[]): number {
+  if (t <= keys[0][0] || t >= keys[keys.length - 1][0]) return 0;
+  for (let i = 1; i < keys.length; i++) {
+    const [t1, v1] = keys[i];
+    if (t <= t1) {
+      const [t0, v0] = keys[i - 1];
+      const x = (t - t0) / (t1 - t0);
+      return v0 + (v1 - v0) * x * x * (3 - 2 * x);
+    }
+  }
+  return 0;
+}
+
+export type FidgetKind = 'look_around' | 'tilt' | 'stretch' | 'hum' | 'sway' | 'perk';
+export const FIDGETS: FidgetKind[] = ['look_around', 'tilt', 'stretch', 'hum', 'sway', 'perk'];
+
+/** Small idle actions so the character doesn't stand like a statue (upper body / neck / head / root only). */
+export function fidgetGesture(kind: FidgetKind, scale = 1, side: 1 | -1 = 1): Gesture {
+  const k = scale;
+  switch (kind) {
+    case 'look_around': // glance to one side, then the other
+      return {
+        duration: 2.8,
+        pose: (t) => {
+          const p = ZERO_POSE();
+          const y = curve(t, [[0, 0], [0.5, 1], [1.1, 1], [1.7, -0.8], [2.2, -0.8], [2.8, 0]]);
+          p.head[1] = 16 * D * k * y * side;
+          p.neck[1] = 5 * D * k * y * side;
+          return p;
+        },
+      };
+    case 'tilt': // a curious head tilt
+      return {
+        duration: 2.0,
+        pose: (t) => {
+          const p = ZERO_POSE();
+          const env = envelope(t, 2.0, 0.25, 0.35);
+          p.head[2] = 12 * D * k * env * side;
+          p.upper[2] = 2.5 * D * k * env * side;
+          return p;
+        },
+      };
+    case 'stretch': // lean back, look up, rise a little
+      return {
+        duration: 2.6,
+        pose: (t) => {
+          const p = ZERO_POSE();
+          const env = envelope(t, 2.6, 0.35, 0.4);
+          p.upper[0] = -7 * D * k * env;
+          p.head[0] = -8 * D * k * env;
+          p.rootY = 0.15 * k * env;
+          return p;
+        },
+      };
+    case 'hum': // sway to a rhythm only she can hear
+      return {
+        duration: 2.4,
+        pose: (t) => {
+          const p = ZERO_POSE();
+          const env = envelope(t, 2.4, 0.15, 0.25);
+          const beat = Math.sin(t * Math.PI * 2 * 1.25);
+          p.head[2] = 6 * D * k * env * beat;
+          p.head[0] = 2.5 * D * k * env * Math.abs(beat);
+          p.upper[2] = 2 * D * k * env * beat;
+          return p;
+        },
+      };
+    case 'sway': // shift the weight from one side to the other
+      return {
+        duration: 3.2,
+        pose: (t) => {
+          const p = ZERO_POSE();
+          const w = curve(t, [[0, 0], [0.8, 1], [1.6, 1], [2.4, -0.6], [3.2, 0]]);
+          p.upper[2] = 4 * D * k * w * side;
+          p.head[2] = -2 * D * k * w * side;
+          return p;
+        },
+      };
+    case 'perk': // notices something: a small bounce, head up
+      return {
+        duration: 1.1,
+        pose: (t) => {
+          const p = ZERO_POSE();
+          p.rootY = 0.18 * k * bell(t / 0.45);
+          p.head[0] = -5 * D * k * envelope(t, 1.1, 0.12, 0.5);
+          return p;
+        },
+      };
+  }
+}
+
+/** Gentle head bob while talking (bob 0 = still). Small enough to sit under lip sync and emotion gestures. */
+export function speakingPose(time: number, bob: number): Pose {
+  const p = ZERO_POSE();
+  if (bob <= 0) return p;
+  p.head[0] = 2.5 * D * bob * Math.max(0, Math.sin(time * Math.PI * 2 * 1.6));
+  p.head[2] = 1.8 * D * bob * Math.sin(time * 1.1);
+  p.upper[1] = 1.5 * D * bob * Math.sin(time * 0.9 + 0.5);
+  return p;
+}
+
+/** Schedules idle fidgets. Postponed while the character is busy, so one never fires right after talking. */
+export class Fidgeter {
+  private next: number;
+  private last: FidgetKind | null = null;
+  constructor(
+    private readonly rng: () => number = Math.random,
+    now = 0,
+  ) {
+    this.next = now + 10;
+  }
+
+  /** eligible: idle, awake, not already moving. Returns a gesture when one is due. */
+  update(t: number, profile: LivelinessProfile, eligible: boolean): Gesture | null {
+    const range = profile.fidgetEvery;
+    if (!range) return null;
+    if (!eligible) {
+      this.next = Math.max(this.next, t + range[0] * 0.5);
+      return null;
+    }
+    if (t < this.next) return null;
+    this.next = t + range[0] + this.rng() * (range[1] - range[0]);
+    let kind = FIDGETS[Math.min(FIDGETS.length - 1, Math.floor(this.rng() * FIDGETS.length))];
+    if (kind === this.last) kind = FIDGETS[(FIDGETS.indexOf(kind) + 1) % FIDGETS.length]; // no immediate repeats
+    this.last = kind;
+    return fidgetGesture(kind, profile.gestureScale, this.rng() < 0.5 ? 1 : -1);
+  }
+}
+
+/** Frame rate while asleep: lower than awake to save power, but not so low that motion (and physics) stutter. */
+export function frameRateFor(state: CharacterState, fps: number): number {
+  return state === 'sleeping' ? Math.min(fps, 15) : fps;
+}
+
+/** Split a frame's time into steps the MMD physics can take in one call (it simulates at most 3 × 1/65 s). */
+export function physicsSteps(dt: number, maxStep = 3 / 65): number[] {
+  const out: number[] = [];
+  let rest = dt;
+  while (rest > 1e-6 && out.length < 8) {
+    const s = Math.min(rest, maxStep);
+    out.push(s);
+    rest -= s;
+  }
+  return out;
+}
+
+// ---------------- transitions (補間) ----------------
+
+/** 0→1 with zero speed and zero acceleration at both ends (minimum-jerk curve). */
+export function smootherstep(u: number): number {
+  const x = Math.min(1, Math.max(0, u));
+  return x * x * x * (x * (x * 6 - 15) + 10);
+}
+
+/** a + (b − a)·k */
+export function blendPose(a: Pose, b: Pose, k: number): Pose {
+  return addPose(a, addPose(b, a, -1), k);
+}
+
+/**
+ * Cross-fades from one motion source (a function of time) to the next over `dur` seconds on a minimum-jerk
+ * curve. The old source keeps running during the fade, so a wave or a breath doesn't freeze half-way. If the
+ * source changes again mid-fade, the unfinished fade itself keeps running as the "from" side, so the motion
+ * carries its speed into the new fade instead of stopping for a moment.
+ */
+export class CrossFader<T> {
+  private clock = 0;
+  private source: () => T;
+  private fade: { from: () => T; to: () => T; start: number; dur: number } | null = null;
+  constructor(
+    private readonly blend: (a: T, b: T, k: number) => T,
+    initial: () => T,
+  ) {
+    this.source = initial;
+  }
+
+  switchTo(next: () => T, dur: number): void {
+    const f = this.fade;
+    let from = this.source;
+    if (f && this.clock < f.start + f.dur) {
+      const clock = () => this.clock;
+      from = () => {
+        const u = (clock() - f.start) / f.dur;
+        return u >= 1 ? f.to() : this.blend(f.from(), f.to(), smootherstep(u));
+      };
+    }
+    this.fade = { from, to: next, start: this.clock, dur: Math.max(1e-3, dur) };
+    this.source = next;
+  }
+
+  /** Advance by dt and return what to show. */
+  update(dt: number): T {
+    this.clock += dt;
+    const f = this.fade;
+    if (f) {
+      const u = (this.clock - f.start) / f.dur;
+      if (u < 1) return this.blend(f.from(), f.to(), smootherstep(u));
+      this.fade = null;
+    }
+    return this.source();
+  }
+
+  get fading(): boolean {
+    return this.fade !== null;
+  }
+}

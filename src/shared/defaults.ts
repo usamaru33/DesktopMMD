@@ -37,7 +37,7 @@ export const DEFAULT_SETTINGS: Settings = {
     postFilter: 'soft',
   },
   window: { x: null, y: null, scale: 1.0, displayId: null, hideOnFullscreen: true },
-  render: { fps: 30, physics: true, hardwareAcceleration: true, gazeLimit: GAZE_LIMIT_DEFAULT, showBubble: true, defaultMotions: true },
+  render: { fps: 30, physics: true, hardwareAcceleration: true, gazeLimit: GAZE_LIMIT_DEFAULT, showBubble: true, defaultMotions: true, liveliness: 'normal' },
   tools: {
     allowedDirs: ['~\\Documents', '~\\Desktop'],
     apps: [],

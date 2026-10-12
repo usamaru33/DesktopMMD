@@ -16,6 +16,8 @@ export type CharacterState =
 export type PermissionLevel = 'L0' | 'L1' | 'L2';
 export type VoiceInputMode = 'push' | 'wake' | 'off';
 export type Effort = 'low' | 'medium' | 'high';
+/** 動きの活発さ（呼吸・揺れの大きさ、手持ちぶさたの仕草の頻度、話しながらのうなずき） */
+export type Liveliness = 'calm' | 'normal' | 'lively';
 export type LlmProvider = 'claude' | 'local';
 
 export interface AppEntry {
@@ -87,6 +89,8 @@ export interface Settings {
     showBubble: boolean;
     /** 個別に指定していない感情で、標準のモーション（VMD）を使う。OFFなら自前の簡単な動き */
     defaultMotions: boolean;
+    /** 動きの活発さ */
+    liveliness: Liveliness;
   };
   tools: {
     allowedDirs: string[];

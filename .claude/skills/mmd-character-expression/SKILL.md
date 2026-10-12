@@ -29,6 +29,7 @@ import { MMDAnimationHelper } from 'three/examples/jsm/animation/MMDAnimationHel
 ### 実装メモ
 
 - ammo は `public/ammo.wasm.js` を `<script src="../ammo.wasm.js">`（ページは `character/index.html` なので一つ上）で読み、`locateFile` も `../`。
+- 物理の「骨→剛体」「剛体→骨」の同期は `installFastBoneSync`（`physicsSync.ts`）で速い版に差し替える（式は three と同じ）。
 - 物理は `helper.add(mesh, {animation: [], physics: true})` の後 `helper.enable('physics', false)` にし、加算回転を適用した後で `helper.objects.get(mesh).physics.update(dt)` を手動で呼ぶ（揺れ物が最新の姿勢に追従する）。
 - 毎フレーム、管理するボーンをレスト姿勢に戻してから `helper.update` → 加算回転、の順。戻さないと回転が累積する。
 - PMXのバインド姿勢はT/Aポーズなので、腕VMDが動いていない間は 左腕/右腕 を Z 軸で約42°下げ、ひじを少し曲げる（ライスシャワーで確認済み）。
@@ -97,6 +98,9 @@ const EMOTION_MORPHS = {
 - アイドルVMD: 30〜90秒ごとに idle_*.vmd から機嫌（mood）で重み付けして1つ再生。無ければスキップ。
 - 放置: 操作なし10分でうとうと（まぶた半分＋頭ゆっくり前後）、30分で Sleeping。入力で起きる。
 - 乱数・時刻は注入できる形にする（テスト用）。
+- 動きの活発さ（`render.liveliness` → `LIVELINESS`）: 呼吸・揺れの振幅、手持ちぶさたの仕草（`Fidgeter` / `fidgetGesture`、待機中・起きている・他の動きが無いときだけ）、話しながらのうなずき（`speakingPose`）、感情の仕草の大きさ、よそ見の頻度、アイドルVMDの間隔をまとめて変える。`normal` の呼吸・揺れは従来値。
+- 話しながらの身ぶり: `talkGestures.ts`（言葉→身ぶりの選択 `chooseTalkGesture`、腕の目標方向 `talkPose`、方向での補間 `blendArm`）と `armRig.ts`（方向→ボーン回転。ひじは蝶番、手のひらは前腕のねじり、付与ボーンへの足し直し、指の曲げ）。文の再生開始で `talk()`、終了で `endTalk()`。腕のVMDが動いている間は、その重みに応じて弱める。
+- 補間: 切り替わる層（状態の姿勢・身ぶり）は `CrossFader`（最小ジャーク曲線、途中切り替えでも速度が続く）でつなぐ。VMDは `vmdLayer.ts` の `VmdLayer`（`update()` 内でボーンを休止姿勢に戻した直後に開始、最後で止めて終わり0.4秒でフェードアウト、同じ感情の連続は複製で）。指数関数的な追従（`1-exp(-dt·k)`）は動き出しが急なので使わない。
 
 ## 6. リップシンク（renderer/character/lipsync.ts、純粋関数）
 
@@ -130,7 +134,8 @@ for 各アクセント句:
 - ドラッグ移動: mousedown（モデル上）→ `window:drag {dx, dy}` を送り、main が setPosition。終了時に位置を settings に保存。
 - ホイール拡縮 50%〜200%：カメラ距離ではなくウィンドウサイズとモデル scale を同時に変えるとクリック判定がずれない。ウィンドウサイズを 480×720×scale にする。
 - 常に表示: Win+D（デスクトップの表示）や最小化で隠れたら、隠すべき状況（ユーザーが非表示にした／全画面アプリ）でない限り `CharacterWindow.reassert()` が復帰させる（minimize イベント＋3秒ごとの見張り）。
-- 描画は 30fps 上限（requestAnimationFrame で経過時間を見て間引く）。非表示・Sleeping 中は 5fps まで落とす。
+- ウィンドウが隠れている（hide / minimize）間は `M2C.visible` を受けて requestAnimationFrame 自体を止める（`setVisible`）。backgroundThrottling を切っているので、止めないと隠れていても描画し続ける。
+- 描画は設定の fps 上限（requestAnimationFrame で経過時間を見て間引く）。Sleeping 中は設定値と 15fps の小さい方（`frameRateFor`）。5fps まで落とすと、1フレームの時間の打ち切り（0.1秒）でスローモーションになり、MMD物理（1回の更新で最大 3×1/65 秒）が骨格に追いつかず揺れ物が暴れる。物理は `physicsSteps` で ≤3/65 秒ずつに分けて進める。
 - 頭・体の判定: クリック位置のピッキングで当たった頂点に一番近いボーン名を見る代わりに、画面上の頭ボーン位置からの距離で「頭」か「体」かを決める（簡単で十分）。
 
 ## 9. 親密度による変化（仕様書4.6）

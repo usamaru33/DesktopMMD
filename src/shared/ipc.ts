@@ -94,6 +94,8 @@ export const M2C = {
   micCapture: 'mic:capture',
   listening: 'mic:listening',
   sleepy: 'character:sleepy',
+  /** the character window was shown / hidden (or minimized): the renderer stops drawing while hidden */
+  visible: 'window:visible',
 } as const;
 
 export interface SentencePayload {
@@ -131,6 +133,7 @@ export interface ViewSettingsPayload {
   physics: boolean;
   gazeLimit: number;
   showBubble: boolean;
+  liveliness: Settings['render']['liveliness'];
   scale: number;
   sleeping: boolean;
   micEnabled: boolean;
@@ -162,6 +165,7 @@ export interface M2CPayloads {
   [M2C.listening]: { speech: boolean };
   /** 0..1 drowsiness from user inactivity (spec 4.3 放置反応) */
   [M2C.sleepy]: number;
+  [M2C.visible]: boolean;
 }
 
 // ---------------- admin window: invoke (request/response) ----------------

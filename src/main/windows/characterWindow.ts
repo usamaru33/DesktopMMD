@@ -78,6 +78,12 @@ export class CharacterWindow {
     win.once('ready-to-show', () => {
       if (!this.userHidden) win.showInactive();
     });
+    // the renderer keeps running while hidden (backgroundThrottling is off for audio and timers), so tell it
+    // to stop drawing: a full-screen game or video shouldn't pay for a character nobody can see
+    win.on('show', () => this.send(M2C.visible, true));
+    win.on('restore', () => this.send(M2C.visible, true));
+    win.on('hide', () => this.send(M2C.visible, false));
+    win.on('minimize', () => this.send(M2C.visible, false));
     win.on('closed', () => {
       this.win = null;
       this.stopCursorFeed();

@@ -156,28 +156,6 @@ export function FlashHost() {
   );
 }
 
-export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): [T | null, () => void, boolean] {
-  const [v, setV] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    fn()
-      .then((r) => alive && setV(r))
-      .catch((e) => {
-        console.error(e);
-        flash(String((e as Error).message ?? e), 'error');
-      })
-      .finally(() => alive && setLoading(false));
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, tick]);
-  return [v, () => setTick((t) => t + 1), loading];
-}
-
 export const KIND_LABELS: Record<string, string> = {
   profile: 'プロフィール',
   preference: '好み',

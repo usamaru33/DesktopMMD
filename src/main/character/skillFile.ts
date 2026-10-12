@@ -20,7 +20,6 @@ export const SECTIONS = [
   { title: 'モード', required: false },
 ] as const;
 
-export type SectionTitle = (typeof SECTIONS)[number]['title'];
 
 /** 箇条書きの項目名。required は「書かないとエラー」。 */
 export const SPEECH_ITEMS = { required: ['一人称', 'ユーザーの呼び方', '文体', '1回の長さの目安'], optional: ['語尾・口癖', '相槌', '笑い方'] };

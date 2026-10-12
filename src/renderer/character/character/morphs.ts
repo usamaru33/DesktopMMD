@@ -25,7 +25,6 @@ export const VOWEL_MORPHS: Record<'a' | 'i' | 'u' | 'e' | 'o', string[]> = {
 };
 
 export const BLINK_MORPHS = ['まばたき', 'まばたき２', 'blink'];
-export const HALF_CLOSED_MORPHS = ['なごみ', 'じと目'];
 
 export function normalizeName(s: string): string {
   return s.normalize('NFKC').replace(/\s+/g, '').toLowerCase();

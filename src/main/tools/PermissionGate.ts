@@ -1,7 +1,7 @@
 // The only path from a model tool_use to an executed tool (spec 5.5 判定の順序, 7.2).
 import type { ApprovalAnswer, ApprovalRequest, PermissionLevel, ToolDecision } from '@shared/types';
 import { PATH_REASON_JA, type PathGuard } from './pathGuard';
-import { type ToolDef, type ToolResult, levelRank, maxLevel } from './types';
+import { type ToolDef, type ToolResult, maxLevel } from './types';
 
 export interface TurnState {
   turnId: number;
@@ -161,8 +161,4 @@ export function classifyVoiceAnswer(text: string): 'approve' | 'deny' | null {
   if (NO.test(t)) return 'deny';
   if (YES.test(t)) return 'approve';
   return null;
-}
-
-export function isStricter(a: PermissionLevel, b: PermissionLevel): boolean {
-  return levelRank(a) > levelRank(b);
 }

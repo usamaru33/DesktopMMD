@@ -607,6 +607,13 @@ export function SettingsPage(p: { navigate(page: AdminPage): void }) {
             <Toggle checked={s.autoLaunch} onChange={(v) => set({ autoLaunch: v })} />
           </Field>
           <Field label="おやすみモード" hint="ONの間はリマインダー以外の声かけをせず、マイクも止めます"><Toggle checked={s.sleeping} onChange={(v) => set({ sleeping: v })} /></Field>
+          <Field label="動きの活発さ" hint="活発: 呼吸や揺れが大きくなり、きょろきょろしたり首をかしげたりする仕草が増え、話しながらうなずきます。おとなしい: 小さな呼吸と揺れだけ">
+            <Select
+              value={s.render.liveliness}
+              options={[{ value: 'calm', label: 'おとなしい' }, { value: 'normal', label: 'ふつう' }, { value: 'lively', label: '活発' }]}
+              onChange={(v) => set({ render: { liveliness: v } })}
+            />
+          </Field>
         </div>
         <Advanced show={adv}>
           <Field label="描画の上限（fps）"><Slider value={s.render.fps} min={10} max={60} step={5} onInput={(v) => set({ render: { fps: v } }, '')} /></Field>

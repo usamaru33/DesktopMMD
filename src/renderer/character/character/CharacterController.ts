@@ -6,20 +6,31 @@ import { MMDAnimationHelper } from 'three/examples/jsm/animation/MMDAnimationHel
 import { GAZE_LIMIT_DEFAULT } from '@shared/defaults';
 import type { Emotion } from '@shared/emotions';
 import type { CharacterLoadPayload } from '@shared/ipc';
-import type { CharacterState } from '@shared/types';
+import type { CharacterState, Liveliness } from '@shared/types';
 import type { MouthWeights } from '../lipsync';
+import { ArmRig } from './armRig';
 import { FallbackAvatar } from './FallbackAvatar';
+import { installFastBoneSync, type MMDPhysicsLike } from './physicsSync';
+import { loadVmdClips, VmdLayer } from './vmdLayer';
 import { type FacePart, PART_WEIGHT, resolveFace, type ResolvedFace, normalizeName } from './morphs';
 import {
-  addPose, Blinker, distributeGaze, emotionGesture, type Gesture, idlePose, limitGaze, type Pose, Spring2, statePose, touchGesture, ZERO_POSE,
+  addPose, Blinker, blendPose, CrossFader, distributeGaze, emotionGesture, Fidgeter, frameRateFor, type Gesture, idlePose, limitGaze, LIVELINESS,
+  type LivelinessProfile, physicsSteps, smootherstep, type Pose, speakingPose, Spring2, statePose, touchGesture, ZERO_POSE,
 } from './motion';
+import { blendLayer, chooseTalkGesture, HOLD, type TalkGestureKind, type TalkLayer, talkPose } from './talkGestures';
 
 const ZERO_MOUTH: MouthWeights = { a: 0, i: 0, u: 0, e: 0, o: 0 };
-const LOWER_BODY = /(センター|グルーブ|全ての親|下半身|足|ひざ|つま先|腰|操作中心)/;
 
 interface ManagedBone {
   bone: THREE.Bone;
   rest: THREE.Quaternion;
+}
+
+interface TalkGesture {
+  kind: TalkGestureKind;
+  start: number;
+  side: 1 | -1;
+  until: number;
 }
 
 interface ActiveGesture {
@@ -49,18 +60,20 @@ export class CharacterController {
   private helper: MMDAnimationHelper | null = null;
   private fallback: FallbackAvatar | null = null;
   private face: ResolvedFace | null = null;
-  private bones: Partial<Record<'upper' | 'neck' | 'head' | 'eyeL' | 'eyeR' | 'armL' | 'armR' | 'elbowL' | 'elbowR', ManagedBone>> = {};
-  private rootRestY = 0;
+  private bones: Partial<Record<'upper' | 'neck' | 'head' | 'eyeL' | 'eyeR', ManagedBone>> = {};
   private modelHeight = 20;
-  private emotionClips: Partial<Record<Emotion, THREE.AnimationClip>> = {};
-  private idleClips: THREE.AnimationClip[] = [];
+  private vmd: VmdLayer | null = null;
   private physicsOn = true;
   /** radians to rotate 腕 down from the bind pose (character.json could override later) */
   private armDown = THREE.MathUtils.degToRad(42);
 
   // layers
   private state: CharacterState = 'idle';
-  private statePoseCur: Pose = ZERO_POSE();
+  /** the state posture (thinking, listening…) cross-fades when the state changes */
+  private stateSrc: { s: CharacterState; side: 1 | -1 } = { s: 'idle', side: 1 };
+  private readonly stateFade = new CrossFader<Pose>(blendPose, () => statePose('idle', this.time, 1));
+  /** 0..1: how much of the talking head bob shows (eases in and out with the speaking state) */
+  private speakAmt = 0;
   private emo: { cur: Emotion; level: number; target: number; prev: Emotion; prevLevel: number } = { cur: 'neutral', level: 0, target: 0, prev: 'neutral', prevLevel: 0 };
   private emoHoldUntil = 0;
   private gestures: ActiveGesture[] = [];
@@ -75,18 +88,34 @@ export class CharacterController {
   private gazeLimit = GAZE_LIMIT_DEFAULT;
   private lastCursor = { x: 0, y: 0 };
   private lookAway = { until: 0, x: 0, y: 0 };
-  private nextIdleMotion = 30;
   private stage = 0;
+  private live: LivelinessProfile = LIVELINESS.normal;
+  private readonly fidgeter = new Fidgeter();
+  // talking gestures (身ぶり)
+  private rig: ArmRig | null = null;
+  private rigBones: THREE.Bone[] = [];
+  private rigRest = new Map<THREE.Bone, THREE.Quaternion>();
+  private talkG: TalkGesture | null = null;
+  /** the gesture the talk layer currently shows (changes → cross-fade) */
+  private talkSrc: TalkGesture | null = null;
+  private readonly talkFade = new CrossFader<TalkLayer>(blendLayer, () => this.talkLayer(null));
+  private breathe = 0;
+  private lastTalk: TalkGestureKind | null = null;
+  private firstPerson = '';
 
   // loop
   private fps = 30;
   private lastFrame = 0;
+  private hidden = false;
+  private loop: ((now: number) => void) | null = null;
   private raf = 0;
   private pickReq: { x: number; y: number; cb: (hit: boolean) => void } | null = null;
   private readonly pixel = new Uint8Array(4);
+  /** the canvas fills the window (CSS px); kept from resize() instead of asking the layout every frame */
+  private viewSize = { width: 1, height: 1 };
   private time = 0;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, premultipliedAlpha: true, powerPreference: 'low-power' });
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
@@ -102,17 +131,22 @@ export class CharacterController {
   async load(p: CharacterLoadPayload, physics: boolean): Promise<LoadResult> {
     this.unload();
     this.stage = p.affinityStage;
+    this.firstPerson = p.preset.firstPerson ?? '';
     this.physicsOn = physics;
     if (!p.modelUrl) {
       this.useFallback();
       return { modelLoaded: false, found: [], missing: [], error: 'モデルが設定されていません' };
     }
     try {
-      if (physics) await ensureAmmo();
+      // the physics engine (wasm) compiles while the model downloads and parses
+      const ammo = physics ? ensureAmmo() : null;
+      ammo?.catch(() => undefined); // a failure is reported by the await below, not as an unhandled rejection
       const loader = new MMDLoader();
       // PMX texture paths use backslashes
       loader.manager.setURLModifier((u) => u.replace(/\\/g, '/'));
       const mesh = await loader.loadAsync(p.modelUrl);
+      const motions = loadVmdClips(loader, mesh, p.motionUrls);
+      if (ammo) await ammo;
       mesh.castShadow = false;
       this.mesh = mesh;
       this.scene.add(mesh);
@@ -127,10 +161,10 @@ export class CharacterController {
       };
       this.bones = {
         upper: find('上半身'), neck: find('首'), head: find('頭'), eyeL: find('左目'), eyeR: find('右目'),
-        armL: find('左腕'), armR: find('右腕'), elbowL: find('左ひじ'), elbowR: find('右ひじ'),
       };
-      const center = find('センター');
-      this.rootRestY = center ? center.bone.position.y : 0;
+      this.rig = new ArmRig(mesh);
+      this.rigBones = this.rig.managedBones();
+      this.rigRest = new Map(this.rigBones.map((b) => [b, b.quaternion.clone()]));
 
       // fit the camera to the bind-pose bounding box
       mesh.geometry.computeBoundingBox();
@@ -142,8 +176,12 @@ export class CharacterController {
       this.helper.add(mesh, { animation: [], physics });
       // physics is stepped manually after our additive bone rotations (see update())
       this.helper.enable('physics', false);
+      const physicsObj = (this.helper as unknown as { objects: WeakMap<object, { physics?: MMDPhysicsLike }> }).objects.get(mesh)?.physics;
+      if (physicsObj) installFastBoneSync(physicsObj);
 
-      await this.loadMotions(loader, p);
+      const mixer = (this.helper as unknown as { objects: WeakMap<object, { mixer?: THREE.AnimationMixer }> }).objects.get(mesh)?.mixer;
+      const clips = await motions;
+      if (mixer) this.vmd = new VmdLayer(mixer, clips);
       const missing = [...this.face.missing];
       for (const k of ['upper', 'neck', 'head'] as const) if (!this.bones[k]) missing.push(`bone.${k}`);
       return { modelLoaded: true, found: this.face.found, missing };
@@ -152,23 +190,6 @@ export class CharacterController {
       this.unload();
       this.useFallback();
       return { modelLoaded: false, found: [], missing: [], error: String((e as Error)?.message ?? e) };
-    }
-  }
-
-  private async loadMotions(loader: MMDLoader, p: CharacterLoadPayload): Promise<void> {
-    const mesh = this.mesh!;
-    const load = (url: string) =>
-      new Promise<THREE.AnimationClip | null>((resolve) =>
-        loader.loadAnimation(url, mesh, (c) => resolve(upperBodyOnly(c as THREE.AnimationClip)), undefined, () => resolve(null)),
-      );
-    for (const [emo, url] of Object.entries(p.motionUrls.emotions)) {
-      if (!url) continue;
-      const clip = await load(url);
-      if (clip) this.emotionClips[emo as Emotion] = clip;
-    }
-    for (const url of p.motionUrls.idle) {
-      const clip = await load(url);
-      if (clip) this.idleClips.push(clip);
     }
   }
 
@@ -194,8 +215,12 @@ export class CharacterController {
     this.helper = null;
     this.face = null;
     this.bones = {};
-    this.emotionClips = {};
-    this.idleClips = [];
+    this.rig = null;
+    this.rigBones = [];
+    this.rigRest.clear();
+    this.talkG = null;
+    this.talkSrc = null;
+    this.vmd = null;
   }
 
   private fitBox = { minY: 0, maxY: 20 };
@@ -221,12 +246,29 @@ export class CharacterController {
   }
 
   resize(w: number, h: number): void {
+    this.viewSize = { width: w, height: h };
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / Math.max(1, h);
     this.fitCamera(this.fitBox.minY, this.fitBox.maxY);
   }
 
   // ---------------- inputs ----------------
+
+  /** Hidden windows draw nothing: stop the loop (physics included) until shown again. */
+  setVisible(v: boolean): void {
+    if (this.hidden === !v) return;
+    this.hidden = !v;
+    if (!v) {
+      // even an empty requestAnimationFrame callback keeps the renderer and the GPU process waking 60×/s
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+      this.pickReq?.cb(false);
+      this.pickReq = null;
+    } else if (this.loop) {
+      this.clock.getDelta(); // don't count the hidden time as one long frame
+      this.raf = requestAnimationFrame(this.loop);
+    }
+  }
 
   setFps(fps: number): void {
     this.fps = fps;
@@ -239,6 +281,11 @@ export class CharacterController {
 
   setPhysics(on: boolean): void {
     this.physicsOn = on;
+  }
+
+  /** 動きの活発さ（呼吸・揺れ、手持ちぶさたの仕草、話しながらのうなずき、感情の仕草の大きさ） */
+  setLiveliness(l: Liveliness): void {
+    this.live = LIVELINESS[l] ?? LIVELINESS.normal;
   }
 
   setStage(stage: number): void {
@@ -281,19 +328,44 @@ export class CharacterController {
   }
 
   private playEmotionMotion(e: Emotion, k: number): void {
-    const clip = this.emotionClips[e];
-    const mixer = this.mixer();
-    if (clip && mixer) {
-      const a = mixer.clipAction(clip);
-      a.reset();
-      a.setLoop(THREE.LoopOnce, 1);
-      a.clampWhenFinished = false;
-      a.setEffectiveWeight(1);
-      a.fadeIn(0.25).play();
+    if (this.vmd?.hasEmotion(e)) {
+      this.vmd.playEmotion(e);
+      // lively: add a smaller procedural gesture on top of the VMD (the VMD only moves upper body / neck / head)
+      if (this.live.gestureScale > 1) {
+        const extra = emotionGesture(e, k * (this.live.gestureScale - 1) * 1.5, Math.random() < 0.5 ? 1 : -1);
+        if (extra) this.gestures.push({ g: extra, t: 0 });
+      }
       return;
     }
-    const g = emotionGesture(e, k, Math.random() < 0.5 ? 1 : -1);
+    const g = emotionGesture(e, k * this.live.gestureScale, Math.random() < 0.5 ? 1 : -1);
     if (g) this.gestures.push({ g, t: 0 });
+  }
+
+  /**
+   * A sentence started (its audio began, or it was shown without voice): pick a gesture from its words.
+   * The gesture is held while the sentence plays (at most HOLD[kind]) and released by endTalk().
+   */
+  talk(text: string, emotion: Emotion): void {
+    if (this.state === 'sleeping' || this.sleepy >= 0.6) return;
+    const kind = chooseTalkGesture(text, emotion, {
+      firstPerson: this.firstPerson,
+      beatChance: this.live.talkBeat,
+      matchChance: this.live.talkMatch,
+      last: this.lastTalk,
+    });
+    this.lastTalk = kind;
+    if (!kind) {
+      this.talkG = null;
+      return;
+    }
+    // keep the same hand for back-to-back gestures; otherwise mostly the right hand
+    const side = this.talkG ? this.talkG.side : Math.random() < 0.75 ? 1 : -1;
+    this.talkG = { kind, start: this.time, side, until: this.time + HOLD[kind] };
+  }
+
+  /** The sentence finished: let the arms come back down shortly after. */
+  endTalk(): void {
+    if (this.talkG) this.talkG.until = Math.min(this.talkG.until, this.time + 0.35);
   }
 
   touch(part: 'head' | 'body'): void {
@@ -321,18 +393,16 @@ export class CharacterController {
     this.gazeTarget = target;
   }
 
-  /** true while a running action has tracks for the arm bones */
-  private armsAnimated(): boolean {
-    const mixer = this.mixer();
-    if (!mixer) return false;
-    const actions = (mixer as unknown as { _actions: THREE.AnimationAction[] })._actions ?? [];
-    return actions.some((a) => a.isRunning() && a.getClip().tracks.some((tr) => /\.bones\[(左|右)腕\]/.test(tr.name)));
-  }
-
-  private mixer(): THREE.AnimationMixer | null {
-    if (!this.helper || !this.mesh) return null;
-    const obj = (this.helper as unknown as { objects: WeakMap<object, { mixer?: THREE.AnimationMixer }> }).objects.get(this.mesh);
-    return obj?.mixer ?? null;
+  /** The talk layer for a gesture (null = relaxed arms, no body offset). */
+  private talkLayer(g: TalkGesture | null): TalkLayer {
+    const breathe = this.breathe;
+    const p = g ? talkPose(g.kind, this.time - g.start, g.side, this.live.gestureScale) : null;
+    const out: TalkLayer = { body: p?.body ?? ZERO_POSE() };
+    if (this.rig) {
+      if (this.rig.right) out.right = p?.right ?? this.rig.relaxed(this.rig.right, 1, this.armDown, breathe, 0.2);
+      if (this.rig.left) out.left = p?.left ?? this.rig.relaxed(this.rig.left, -1, this.armDown, breathe, 0.2);
+    }
+    return out;
   }
 
   /** Screen position (CSS px, window-local) of the head, for bubble placement and head/body hit tests. */
@@ -341,12 +411,13 @@ export class CharacterController {
     if (this.bones.head) this.bones.head.bone.getWorldPosition(v);
     else v.set(0, this.fitBox.minY + this.modelHeight * 0.88, 0);
     v.project(this.camera);
-    const r = this.canvas.getBoundingClientRect();
+    const r = this.viewSize;
     return { x: ((v.x + 1) / 2) * r.width, y: ((1 - v.y) / 2) * r.height };
   }
 
   /** Pixel-accurate hit test against the rendered model (alpha at the mouse), resolved after the next render. */
   pick(x: number, y: number): Promise<boolean> {
+    if (this.hidden) return Promise.resolve(false);
     return new Promise((cb) => {
       this.pickReq = { x, y, cb };
     });
@@ -356,8 +427,9 @@ export class CharacterController {
 
   start(): void {
     const loop = (now: number) => {
+      if (this.hidden) return;
       this.raf = requestAnimationFrame(loop);
-      const minDt = 1000 / (this.state === 'sleeping' ? 5 : this.fps);
+      const minDt = 1000 / frameRateFor(this.state, this.fps);
       if (now - this.lastFrame < minDt - 1) {
         if (this.pickReq) this.renderFrame(0); // answer hit tests promptly
         return;
@@ -366,11 +438,13 @@ export class CharacterController {
       const dt = Math.min(0.1, this.clock.getDelta());
       this.renderFrame(dt);
     };
-    this.raf = requestAnimationFrame(loop);
+    this.loop = loop;
+    if (!this.hidden) this.raf = requestAnimationFrame(loop);
   }
 
   stop(): void {
     cancelAnimationFrame(this.raf);
+    this.loop = null;
   }
 
   private renderFrame(dt: number): void {
@@ -404,13 +478,31 @@ export class CharacterController {
     if (e.level === 0 && e.target === 0 && e.cur !== 'neutral' && t > this.emoHoldUntil) e.cur = 'neutral';
 
     // ---- pose: idle + state + gestures ----
-    let pose = idlePose(t, this.mood);
-    const target = statePose(this.state, t, this.side);
-    const k = 1 - Math.exp(-dt * 6);
-    this.statePoseCur = addPose(this.statePoseCur, addPose(target, this.statePoseCur, -1), k);
-    pose = addPose(pose, this.statePoseCur);
+    let pose = idlePose(t, this.mood, this.live.amp);
+    this.speakAmt = Math.min(1, Math.max(0, this.speakAmt + (this.state === 'speaking' ? dt : -dt) / 0.4));
+    if (this.speakAmt > 0) pose = addPose(pose, speakingPose(t, this.live.speakingBob), smootherstep(this.speakAmt));
+    if (this.state !== this.stateSrc.s || this.side !== this.stateSrc.side) {
+      const slow = this.stateSrc.s === 'sleeping' || this.state === 'sleeping';
+      const { state: s, side } = this;
+      this.stateFade.switchTo(() => statePose(s, this.time, side), slow ? 1.2 : 0.45);
+      this.stateSrc = { s, side };
+    }
+    pose = addPose(pose, this.stateFade.update(dt));
+    // idle fidgets (look around, tilt, stretch…): only while idle, awake and not already moving
+    const fidget = this.fidgeter.update(t, this.live, this.state === 'idle' && this.sleepy < 0.3 && this.gestures.length === 0 && e.level < 0.05);
+    if (fidget) this.gestures.push({ g: fidget, t: 0 });
     this.gestures = this.gestures.filter((g) => (g.t += dt) < g.g.duration);
     for (const g of this.gestures) pose = addPose(pose, g.g.pose(g.t));
+    // talking gesture: body part here, the arms below (after the mixer). Gesture changes cross-fade.
+    this.breathe = Math.sin((t / 4) * Math.PI * 2) * 0.01;
+    if (this.talkG && (t > this.talkG.until || this.state === 'sleeping')) this.talkG = null;
+    if (this.talkG !== this.talkSrc) {
+      const g = this.talkG;
+      this.talkFade.switchTo(() => this.talkLayer(g), g ? (this.talkSrc ? 0.4 : 0.35) : 0.55);
+      this.talkSrc = g;
+    }
+    const talk = this.talkFade.update(dt);
+    pose = addPose(pose, talk.body);
     if (this.sleepy > 0 && this.state !== 'sleeping') {
       pose.head[0] += 0.12 * this.sleepy * (0.6 + 0.4 * Math.sin(t * 0.8));
     }
@@ -424,7 +516,7 @@ export class CharacterController {
     else if (this.state === 'sleeping') gy = -0.2;
     else if (!lookCamera && this.gazeTarget !== 'camera') {
       const head = this.headScreenPos();
-      const r = this.canvas.getBoundingClientRect();
+      const r = this.viewSize;
       const dx = (this.gazeTarget.x - head.x) / Math.max(200, r.width * 1.5);
       const dy = (head.y - this.gazeTarget.y) / Math.max(200, r.height);
       [gx, gy] = limitGaze(Math.atan(dx * 1.6), Math.atan(dy * 1.2), this.gazeLimit);
@@ -432,7 +524,7 @@ export class CharacterController {
       if (t - this.gazeIdleSince > 3) {
         gx *= 0.5;
         gy *= 0.5;
-        if (t > this.lookAway.until && Math.random() < dt * 0.15) this.lookAway = { until: t + 1.2, x: (Math.random() - 0.5) * 0.8, y: (Math.random() - 0.3) * 0.4 };
+        if (t > this.lookAway.until && Math.random() < dt * 0.15 * this.live.glance) this.lookAway = { until: t + 1.2, x: (Math.random() - 0.5) * 0.8, y: (Math.random() - 0.3) * 0.4 };
       }
     }
     if (t < this.lookAway.until && this.state === 'idle') {
@@ -466,6 +558,8 @@ export class CharacterController {
 
     // reset managed bones to rest before the mixer runs
     for (const b of Object.values(this.bones)) if (b) b.bone.quaternion.copy(b.rest);
+    for (const [b, q] of this.rigRest) b.quaternion.copy(q);
+    this.vmd?.startPending();
     this.helper.update(dt);
 
     const infl = this.mesh.morphTargetInfluences!;
@@ -510,30 +604,26 @@ export class CharacterController {
     rot(this.bones.eyeL, -gz.eyes[1] * 0.5, gz.eyes[0] * 0.5, 0);
     rot(this.bones.eyeR, -gz.eyes[1] * 0.5, gz.eyes[0] * 0.5, 0);
     // PMX bind pose is a T/A-pose: lower the arms into a relaxed stance unless a VMD drives them
-    if (!this.armsAnimated()) {
-      const breathe = Math.sin((t / 4) * Math.PI * 2) * 0.01;
-      rot(this.bones.armL, 0, 0, -this.armDown + breathe);
-      rot(this.bones.armR, 0, 0, this.armDown - breathe);
-      rot(this.bones.elbowL, 0, -0.18, 0);
-      rot(this.bones.elbowR, 0, 0.18, 0);
+    // and while talking, the gesture's arms. An arm VMD takes over in proportion to its fade weight.
+    this.vmd?.fadeOutEnding();
+    const ours = 1 - (this.vmd?.armWeight() ?? 0);
+    if (this.rig && ours > 0) {
+      for (const name of ['right', 'left'] as const) {
+        const side = this.rig[name];
+        const target = talk[name];
+        if (side && target) this.rig.apply(side, this.rig.solve(side, target), ours);
+      }
     }
     this.mesh.position.y = pose.rootY * (this.modelHeight / 20);
 
-    // idle VMD every 30–90 s (spec 4.3)
-    if (this.state === 'idle' && this.idleClips.length && t > this.nextIdleMotion) {
-      this.nextIdleMotion = t + 30 + Math.random() * 60;
-      const mixer = this.mixer();
-      if (mixer) {
-        const clip = this.idleClips[Math.floor(Math.random() * this.idleClips.length)];
-        const a = mixer.clipAction(clip);
-        a.reset().setLoop(THREE.LoopOnce, 1).fadeIn(0.5).play();
-      }
-    }
+    this.vmd?.maybePlayIdle(t, this.state === 'idle', this.live.idleVmdEvery);
 
     this.mesh.updateMatrixWorld(true);
     if (this.physicsOn) {
       const obj = (this.helper as unknown as { objects: WeakMap<object, { physics?: { update(dt: number): void } }> }).objects.get(this.mesh);
-      obj?.physics?.update(dt);
+      // at low frame rates one frame is longer than the physics can simulate in one call (≤3 × 1/65 s):
+      // step in pieces so hair and skirts keep up with the body instead of lagging and snapping
+      for (const step of physicsSteps(dt)) obj?.physics?.update(step);
     }
   }
 
@@ -542,15 +632,6 @@ export class CharacterController {
     this.unload();
     this.renderer.dispose();
   }
-}
-
-/** Keep only upper-body bone tracks (spec 4.2: so the standing position never drifts). */
-function upperBodyOnly(clip: THREE.AnimationClip): THREE.AnimationClip {
-  const tracks = clip.tracks.filter((tr) => {
-    const m = /^\.bones\[(.+?)\]\./.exec(tr.name);
-    return !!m && !LOWER_BODY.test(m[1]);
-  });
-  return new THREE.AnimationClip(clip.name, clip.duration, tracks);
 }
 
 let ammoPromise: Promise<void> | null = null;

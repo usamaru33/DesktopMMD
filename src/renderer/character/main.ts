@@ -1,7 +1,6 @@
 // Character window entry: wires the bridge, the 3D character, audio, mic and the overlays.
 import './style.css';
 import { C2M, M2C, type SpeechAudioPayload } from '@shared/ipc';
-import type { Emotion } from '@shared/emotions';
 import type { CharacterState } from '@shared/types';
 import { AudioPlayer } from './AudioPlayer';
 import { CharacterController } from './character/CharacterController';
@@ -18,17 +17,19 @@ const character = new CharacterController(canvas);
 character.start();
 
 let state: CharacterState = 'idle';
-const sentenceEmotion = new Map<number, { e: Emotion; i: number }>();
+const sentenceText = new Map<number, string>();
 
 const player = new AudioPlayer({
   onStart: (p) => {
     if (!p.preview) bridge.send(C2M.speechPlayed, { sentenceId: p.sentenceId, phase: 'start' });
     character.setEmotion(p.emotion, p.intensity);
     if (p.preview) character.setState('speaking');
+    else character.talk(sentenceText.get(p.sentenceId) ?? '', p.emotion);
   },
   onEnd: (p) => {
     if (!p.preview) bridge.send(C2M.speechPlayed, { sentenceId: p.sentenceId, phase: 'end' });
-    sentenceEmotion.delete(p.sentenceId);
+    sentenceText.delete(p.sentenceId);
+    if (!p.preview) character.endTalk();
     if (!p.preview && !player.playing && state === 'idle') ui.scheduleBubbleHide();
     if (p.preview && !player.playing) character.setState(state);
   },
@@ -71,8 +72,10 @@ bridge.on(M2C.state, (s) => {
 
 bridge.on(M2C.sentence, (p) => {
   ui.sentence(p.turnId, p.text, p.emotion);
-  if (p.silent) character.setEmotion(p.emotion, p.intensity);
-  else sentenceEmotion.set(p.sentenceId, { e: p.emotion, i: p.intensity });
+  if (p.silent) {
+    character.setEmotion(p.emotion, p.intensity);
+    character.talk(p.text, p.emotion);
+  } else sentenceText.set(p.sentenceId, p.text);
   placeOverlays();
 });
 
@@ -97,6 +100,7 @@ bridge.on(M2C.status, (st) => ui.setServiceStatus(st));
 bridge.on(M2C.toast, (t) => ui.toast(t.text, t.kind));
 bridge.on(M2C.mood, (m) => character.setMood(m));
 bridge.on(M2C.sleepy, (s) => character.setSleepy(s));
+bridge.on(M2C.visible, (v) => character.setVisible(v));
 bridge.on(M2C.listening, (l) => ui.setMicSpeech(l.speech));
 bridge.on(M2C.micCapture, (on) => {
   if (on)
@@ -113,6 +117,7 @@ bridge.on(M2C.view, (v) => {
   character.setFps(v.fps);
   character.setPhysics(v.physics);
   character.setGazeLimit(v.gazeLimit);
+  character.setLiveliness(v.liveliness);
   ui.setBubbleEnabled(v.showBubble);
   player.setFilter(v.voiceFilter);
   ui.setMuted(v.muted, !v.micEnabled || v.voiceInput === 'off', v.voiceInput === 'wake');
