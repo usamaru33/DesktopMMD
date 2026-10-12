@@ -5,7 +5,9 @@ import { marked } from 'marked';
 const md = fs.readFileSync('README.md', 'utf8')
   // the developer guide isn't shipped; drop the pointer to it
   .replace(/^> 開発者向けの情報は.*$/m, '');
-const body = marked.parse(md, { gfm: true });
+// the installer's README.html is a single file: inline the images it points to
+const body = (marked.parse(md, { gfm: true })).replace(/<img src="(docs\/images\/[^"]+\.(jpg|png))"/g, (_, src, ext) =>
+  `<img src="data:image/${ext === 'jpg' ? 'jpeg' : 'png'};base64,${fs.readFileSync(src).toString('base64')}"`);
 const html = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DesktopMMD の使い方</title>
@@ -17,7 +19,7 @@ main{max-width:860px;margin:0 auto;padding:32px 24px 80px;background:var(--panel
 h1{color:var(--accent);margin-top:0}h2{border-bottom:2px solid var(--line);padding-bottom:4px;margin-top:2.2em}
 table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
 th{background:var(--bg)}code{background:var(--bg);padding:1px 5px;border-radius:4px}a{color:var(--accent)}
-blockquote{margin:12px 0;padding:8px 14px;border-left:4px solid var(--accent);background:var(--bg);color:var(--soft)}
+img{max-width:100%;height:auto;border-radius:6px}blockquote{margin:12px 0;padding:8px 14px;border-left:4px solid var(--accent);background:var(--bg);color:var(--soft)}
 </style></head><body><main>${body}</main></body></html>`;
 fs.mkdirSync('build', { recursive: true });
 fs.writeFileSync('build/README.html', html);
