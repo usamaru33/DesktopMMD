@@ -1383,17 +1383,27 @@ export class App {
     setTimeout(() => void updater.checkAndUpdate(), 8000).unref();
   }
 
-  /** 終了を待ってから静かにインストールし、終わったら（失敗しても）アプリを起動し直す。 */
+  /**
+   * インストーラー（electron-builder の NSIS）を直接起動して終了する。インストーラーは `--updated` でこのアプリの
+   * 終了を待ち（残っていれば終了させ）、`/S` で静かに入れ、`--force-run` で終わったらアプリを起動し直す
+   * （electron-updater と同じ渡し方）。
+   * 以前は PowerShell を detached で起動して「待つ→入れる→起動」をさせていたが、コンソールのない状態で起動された
+   * PowerShell は何も実行せずに終了するため、インストーラーが一度も動いていなかった。
+   */
   private runInstaller(file: string): void {
-    const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
-    const script = `Start-Sleep -Seconds 3; Start-Process -FilePath ${q(file)} -ArgumentList '/S' -Wait; Start-Process -FilePath ${q(process.execPath)}`;
-    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', script], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.unref();
-    setTimeout(() => this.quit(), 1500);
+    try {
+      const child = spawn(file, ['--updated', '/S', '--force-run'], { detached: true, stdio: 'ignore' });
+      child.on('error', (e) => log.warn('installer launch failed', e));
+      child.unref();
+    } catch (e) {
+      log.warn('installer launch failed', e);
+      this.toast('更新のインストーラーを起動できませんでした', 'warn');
+      return;
+    }
+    log.info(`installer started: ${path.basename(file)}`);
+    // the installer replaces resources\sidecar\sidecar.exe: it must not be running by then
+    this.sidecar?.stop(true);
+    this.quit();
   }
 
   // ---------------- lifecycle ----------------

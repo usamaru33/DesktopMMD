@@ -1,5 +1,5 @@
 // Python sidecar process management and WebSocket client (spec 2.4, 5.6; NFR-08 auto restart).
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
@@ -294,14 +294,26 @@ export class SidecarClient extends EventEmitter implements SttPort {
     this.proc?.kill();
   }
 
-  stop(): void {
+  /**
+   * Ask the sidecar to exit (it quits when stdin closes), killing it after 2 s. `now`: kill the process tree
+   * right away and wait for it — before an update, whose installer replaces sidecar.exe and can't while it runs.
+   */
+  stop(now = false): void {
     this.stopped = true;
+    const p = this.proc;
+    if (now && p?.pid && p.exitCode === null) {
+      try {
+        execFileSync('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 5000 });
+        return;
+      } catch {
+        /* fall through to the gentle path */
+      }
+    }
     try {
-      this.proc?.stdin?.end();
+      p?.stdin?.end();
     } catch {
       /* ignore */
     }
-    const p = this.proc;
     setTimeout(() => p?.kill(), 2000);
   }
 }

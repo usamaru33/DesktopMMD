@@ -98,7 +98,7 @@ python scripts/make-icon.py  # アイコン（build/icon.ico）を作り直す�
 ## 自動更新
 
 - 起動の約8秒後に `src/main/update/UpdateService.ts` が `https://api.github.com/repos/usamaru33/DesktopMMD/releases/latest` を確認する（Electron非依存。通信・保存先・インストーラー起動は注入）。
-- 現在の版（`app.getVersion()`）より新しければ、リリースの資産 `DesktopMMD-Setup-<版>.exe`（https の github.com のものだけ）を `%TEMP%\DesktopMMD-update` に落とし、サイズと sha256（GitHub が付ける `digest`）を検証してから、`App.runInstaller` が PowerShell を切り離して起動して終了する。PowerShell は3秒待って `/S`（サイレント）でインストールし、終わったら（失敗しても）アプリを起動し直す。
+- 現在の版（`app.getVersion()`）より新しければ、リリースの資産 `DesktopMMD-Setup-<版>.exe`（https の github.com のものだけ）を `%TEMP%\DesktopMMD-update` に落とし、サイズと sha256（GitHub が付ける `digest`）を検証してから、`App.runInstaller` がインストーラーを `--updated /S --force-run` で直接（detached で）起動し、サイドカーを止めてから終了する。インストーラー（electron-builder の NSIS）は `--updated` でアプリの終了を待ち（残っていれば終了させ）、`/S` で静かに入れ、`--force-run` で終わったらアプリを起動し直す（electron-updater と同じ）。0.5.0 までは PowerShell を detached で起動して同じことをさせていたが、コンソールのない状態で起動された PowerShell は何も実行せずに終了コード0で終わるため、インストーラーが一度も動いていなかった（Electron から `detached: true` で起動するのは GUI のプログラムにすること）。
 - 開発起動（`app.isPackaged` が false）、`MMD_FAKE_LLM=1`、設定 `autoUpdate` が OFF のときは何もしない。通信や検証の失敗はログ（`update`）に残すだけで、アプリは通常どおり使える。
 - リリースの出し方: `package.json` の version を上げて `npm run dist` → GitHub で `v<版>` のタグでリリースを作り、`dist/DesktopMMD-Setup-<版>.exe` を添付する（prerelease・draft は対象外）。
 - 手動確認: 設定画面の「バージョン」カードのボタン → IPC `update:check`（`checkAndUpdate(true)`。自動更新の設定がOFFでも動くが、開発起動では `disabled`）。版の表示は IPC `app:version` とトレイメニューの先頭。
