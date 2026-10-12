@@ -6,16 +6,17 @@ import { MMDAnimationHelper } from 'three/examples/jsm/animation/MMDAnimationHel
 import { GAZE_LIMIT_DEFAULT } from '@shared/defaults';
 import type { Emotion } from '@shared/emotions';
 import type { CharacterLoadPayload } from '@shared/ipc';
-import type { CharacterState, Liveliness } from '@shared/types';
+import type { CharacterState, Liveliness, TouchPart } from '@shared/types';
 import type { MouthWeights } from '../lipsync';
 import { ArmRig } from './armRig';
 import { FallbackAvatar } from './FallbackAvatar';
 import { installFastBoneSync, type MMDPhysicsLike } from './physicsSync';
+import { classifyTouch, faceUnit, type ScreenPt, sideOf, type TouchPoints } from './touchZones';
 import { loadVmdClips, VmdLayer } from './vmdLayer';
-import { type FacePart, PART_WEIGHT, resolveFace, type ResolvedFace, normalizeName } from './morphs';
+import { type FacePart, faceLevel, PART_WEIGHT, resolveFace, type ResolvedFace, normalizeName } from './morphs';
 import {
   addPose, Blinker, blendPose, CrossFader, distributeGaze, emotionGesture, Fidgeter, frameRateFor, type Gesture, idlePose, limitGaze, LIVELINESS,
-  type LivelinessProfile, physicsSteps, smootherstep, type Pose, speakingPose, Spring2, statePose, touchGesture, ZERO_POSE,
+  type LivelinessProfile, patPose, physicsSteps, smootherstep, type Pose, speakingPose, Spring2, statePose, touchGesture, ZERO_POSE,
 } from './motion';
 import { blendLayer, chooseTalkGesture, HOLD, type TalkGestureKind, type TalkLayer, talkPose } from './talkGestures';
 
@@ -74,6 +75,12 @@ export class CharacterController {
   private readonly stateFade = new CrossFader<Pose>(blendPose, () => statePose('idle', this.time, 1));
   /** 0..1: how much of the talking head bob shows (eases in and out with the speaking state) */
   private speakAmt = 0;
+  /** bones used only to tell where a click landed (hands, shoulders, waist) */
+  private touchBones: { hands: [THREE.Bone, THREE.Bone | null][]; shoulders: THREE.Bone[]; hips: THREE.Bone | null } = { hands: [], shoulders: [], hips: null };
+  /** being stroked on the head (PatDetector in main.ts) */
+  private patting = false;
+  /** 0..1: how much the "being patted" posture shows */
+  private patAmt = 0;
   private emo: { cur: Emotion; level: number; target: number; prev: Emotion; prevLevel: number } = { cur: 'neutral', level: 0, target: 0, prev: 'neutral', prevLevel: 0 };
   private emoHoldUntil = 0;
   private gestures: ActiveGesture[] = [];
@@ -162,6 +169,16 @@ export class CharacterController {
       this.bones = {
         upper: find('上半身'), neck: find('首'), head: find('頭'), eyeL: find('左目'), eyeR: find('右目'),
       };
+      const bone = (name: string) => mesh.skeleton.bones.find((b) => b.name === name) ?? null;
+      this.touchBones = {
+        // [wrist, elbow]: the palm is past the wrist, along the forearm
+        hands: (['左', '右'] as const).flatMap((s) => {
+          const w = bone(`${s}手首`);
+          return w ? [[w, bone(`${s}ひじ`)] as [THREE.Bone, THREE.Bone | null]] : [];
+        }),
+        shoulders: ['左腕', '右腕'].map(bone).filter((b): b is THREE.Bone => !!b),
+        hips: bone('下半身'),
+      };
       this.rig = new ArmRig(mesh);
       this.rigBones = this.rig.managedBones();
       this.rigRest = new Map(this.rigBones.map((b) => [b, b.quaternion.clone()]));
@@ -215,6 +232,7 @@ export class CharacterController {
     this.helper = null;
     this.face = null;
     this.bones = {};
+    this.touchBones = { hands: [], shoulders: [], hips: null };
     this.rig = null;
     this.rigBones = [];
     this.rigRest.clear();
@@ -368,16 +386,64 @@ export class CharacterController {
     if (this.talkG) this.talkG.until = Math.min(this.talkG.until, this.time + 0.35);
   }
 
-  touch(part: 'head' | 'body'): void {
-    this.gestures.push({ g: touchGesture(part), t: 0 });
-    if (part === 'head') {
-      // being patted: eyes close happily, a bit shy at low affinity
-      this.setEmotion(this.stage === 0 ? 'shy' : 'happy', 0.7);
-      this.emoHoldUntil = this.time + 1.5;
-    } else {
-      this.setEmotion('surprised', 0.5);
-      this.emoHoldUntil = this.time + 1.0;
+  /** Where a click at window CSS px (x, y) landed, and on which side of the body. */
+  touchPartAt(x: number, y: number): { part: TouchPart; side: 1 | -1 } {
+    const pts = this.touchPoints();
+    const p = { x, y };
+    return { part: classifyTouch(p, pts, faceUnit(pts, this.viewSize.height)), side: sideOf(p, pts) };
+  }
+
+  private touchPoints(): TouchPoints {
+    const screen = (o: THREE.Object3D): ScreenPt => this.toScreen(o.getWorldPosition(new THREE.Vector3()));
+    const { eyeL, eyeR, neck } = this.bones;
+    let face = this.headScreenPos();
+    if (eyeL && eyeR) {
+      const a = screen(eyeL.bone);
+      const b = screen(eyeR.bone);
+      face = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     }
+    return {
+      face,
+      neck: neck ? screen(neck.bone) : null,
+      hands: this.touchBones.hands.map(([w, e]) => {
+        const a = screen(w);
+        if (!e) return a;
+        const b = screen(e);
+        return { x: a.x + (a.x - b.x) * 0.45, y: a.y + (a.y - b.y) * 0.45 };
+      }),
+      shoulders: this.touchBones.shoulders.map(screen),
+      hips: this.touchBones.hips ? screen(this.touchBones.hips) : null,
+    };
+  }
+
+  /** A click on the model: a quick reaction right away (the line, if any, comes from main a moment later). */
+  touch(part: TouchPart, side: 1 | -1 = 1): void {
+    if (this.state === 'sleeping') return;
+    this.gestures.push({ g: touchGesture(part, side), t: 0 });
+    const react: Record<TouchPart, [Emotion, number, number]> = {
+      // being patted on the head: eyes close happily, a bit shy at low affinity
+      head: [this.stage === 0 ? 'shy' : 'happy', 0.7, 1.5],
+      cheek: ['shy', 0.6, 1.5],
+      hand: ['happy', 0.6, 1.5],
+      shoulder: ['surprised', 0.4, 1.0],
+      body: ['surprised', 0.5, 1.0],
+      legs: ['shy', 0.8, 1.8],
+    };
+    const [emo, k, hold] = react[part];
+    this.setEmotion(emo, k);
+    this.emoHoldUntil = this.time + hold;
+    // a hand that was touched waves back a little
+    if (part === 'hand' && this.state === 'idle' && this.rig) this.talkG = { kind: 'wave', start: this.time, side, until: this.time + 1.6 };
+  }
+
+  /** Being stroked on the head (true while it lasts). */
+  pat(on: boolean): void {
+    if (on === this.patting || (on && this.state === 'sleeping')) return;
+    this.patting = on;
+    if (on) {
+      this.setEmotion('happy', 0.85);
+      this.emoHoldUntil = Number.POSITIVE_INFINITY;
+    } else this.emoHoldUntil = this.time + 1.2;
   }
 
   setMouthSource(fn: (() => MouthWeights) | null): void {
@@ -410,7 +476,11 @@ export class CharacterController {
     const v = new THREE.Vector3();
     if (this.bones.head) this.bones.head.bone.getWorldPosition(v);
     else v.set(0, this.fitBox.minY + this.modelHeight * 0.88, 0);
-    v.project(this.camera);
+    return this.toScreen(v);
+  }
+
+  private toScreen(world: THREE.Vector3): ScreenPt {
+    const v = world.project(this.camera);
     const r = this.viewSize;
     return { x: ((v.x + 1) / 2) * r.width, y: ((1 - v.y) / 2) * r.height };
   }
@@ -506,6 +576,8 @@ export class CharacterController {
     if (this.sleepy > 0 && this.state !== 'sleeping') {
       pose.head[0] += 0.12 * this.sleepy * (0.6 + 0.4 * Math.sin(t * 0.8));
     }
+    this.patAmt = Math.min(1, Math.max(0, this.patAmt + (this.patting ? dt / 0.5 : -dt / 0.7)));
+    if (this.patAmt > 0) pose = addPose(pose, patPose(t), smootherstep(this.patAmt));
 
     // ---- gaze ----
     let gx = 0;
@@ -585,8 +657,8 @@ export class CharacterController {
         set(idx, w);
       }
     };
-    applyEmotion(e.prev, e.prevLevel);
-    applyEmotion(e.cur, e.level);
+    applyEmotion(e.prev, faceLevel(e.prevLevel));
+    applyEmotion(e.cur, faceLevel(e.level));
     if (baseline > 0) applyEmotion('happy', baseline);
     if (this.state === 'thinking') set(f.emotions.thinking?.brow, 0.5);
     for (const [v, idx] of Object.entries(f.vowels) as [keyof MouthWeights, number][]) set(idx, mouth[v]);

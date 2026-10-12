@@ -36,6 +36,8 @@ export interface JsonParams {
   maxTokens: number;
   signal?: AbortSignal;
   purpose: string;
+  /** default: the API's default (Claude) / 0 (local). Raise it for creative writing */
+  temperature?: number;
 }
 
 /** The seam the Orchestrator and MemoryService depend on (NFR-09). */
@@ -144,6 +146,7 @@ export class LlmClient implements LlmAdapter {
         system: p.system,
         messages: [{ role: 'user', content: p.user }],
         output_config: { format: { type: 'json_schema', schema: p.schema } },
+        ...(p.temperature !== undefined ? { temperature: p.temperature } : {}),
       },
       p.purpose,
       p.signal,

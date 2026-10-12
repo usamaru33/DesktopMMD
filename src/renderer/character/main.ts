@@ -4,6 +4,7 @@ import { C2M, M2C, type SpeechAudioPayload } from '@shared/ipc';
 import type { CharacterState } from '@shared/types';
 import { AudioPlayer } from './AudioPlayer';
 import { CharacterController } from './character/CharacterController';
+import { PatDetector } from './character/touchZones';
 import { MicCapture } from './MicCapture';
 import { OverlayUI } from './OverlayUI';
 
@@ -31,7 +32,10 @@ const player = new AudioPlayer({
     sentenceText.delete(p.sentenceId);
     if (!p.preview) character.endTalk();
     if (!p.preview && !player.playing && state === 'idle') ui.scheduleBubbleHide();
-    if (p.preview && !player.playing) character.setState(state);
+    if (p.preview && !player.playing) {
+      character.setState(state);
+      if (state === 'idle') ui.scheduleBubbleHide();
+    }
   },
 });
 character.setMouthSource(() => player.mouth());
@@ -77,6 +81,17 @@ bridge.on(M2C.sentence, (p) => {
     character.talk(p.text, p.emotion);
   } else sentenceText.set(p.sentenceId, p.text);
   placeOverlays();
+});
+
+// a line in reaction to a touch: its own bubble each time (not appended to the previous one)
+let touchBubble = -100;
+bridge.on(M2C.touchLine, (p) => {
+  ui.sentence(--touchBubble, p.text, p.emotion);
+  placeOverlays();
+  if (p.silent) {
+    character.setEmotion(p.emotion, p.intensity);
+    if (state === 'idle') ui.scheduleBubbleHide();
+  }
 });
 
 bridge.on(M2C.detail, (p) => ui.detailMarkdown(p.turnId, p.markdown));
@@ -183,6 +198,7 @@ window.addEventListener('mousemove', async (e) => {
   }
   overModel = await character.pick(e.clientX, e.clientY);
   document.body.classList.toggle('over-model', overModel);
+  trackPat(e.clientX, e.clientY);
   setIgnore(!overModel && !ui.inputOpen);
 });
 
@@ -203,12 +219,32 @@ window.addEventListener('mouseup', (e) => {
     bridge.send(C2M.dragEnd, undefined);
     return;
   }
-  // a click: head or body reaction (FR-EX-05)
-  const head = character.headScreenPos();
-  const part = Math.hypot(e.clientX - head.x, e.clientY - head.y) < window.innerHeight * 0.09 ? 'head' : 'body';
-  character.touch(part);
-  bridge.send(C2M.touch, part);
+  // a click: the reaction depends on where (FR-EX-05)
+  const { part, side } = character.touchPartAt(e.clientX, e.clientY);
+  character.touch(part, side);
+  bridge.send(C2M.touch, { part, kind: 'tap' });
 });
+
+// stroking: moving the cursor back and forth over the head, no click needed
+const pat = new PatDetector();
+let patSentAt = 0;
+function trackPat(x: number, y: number): void {
+  const now = performance.now();
+  if (!overModel || character.touchPartAt(x, y).part !== 'head') {
+    pat.leave();
+    return;
+  }
+  const started = pat.move(x, now / 1000) === 'start';
+  // a long stroke gets another line now and then (main rate-limits it further)
+  if (started || (pat.active && now - patSentAt > 10_000)) {
+    character.pat(true);
+    patSentAt = now;
+    bridge.send(C2M.touch, { part: 'head', kind: 'pat' });
+  }
+}
+setInterval(() => {
+  if (pat.tick(performance.now() / 1000)) character.pat(false);
+}, 200);
 
 window.addEventListener('dblclick', (e) => {
   if (!overModel || isUiElement(e.clientX, e.clientY)) return;

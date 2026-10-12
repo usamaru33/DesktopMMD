@@ -1,6 +1,6 @@
 // Procedural motion primitives (spec 4.2 自前動作, 4.3 アイドル, 4.5 視線). Pure math, no three.js.
 import type { Emotion } from '@shared/emotions';
-import type { CharacterState, Liveliness } from '@shared/types';
+import type { CharacterState, Liveliness, TouchPart } from '@shared/types';
 
 /** Additive rotations in radians (x: pitch forward+, y: yaw left+, z: roll) and a root offset. */
 export interface Pose {
@@ -116,20 +116,62 @@ export function emotionGesture(e: Emotion, intensity: number, side: 1 | -1 = 1):
   }
 }
 
-export function touchGesture(part: 'head' | 'body'): Gesture {
-  if (part === 'head') {
-    return {
-      duration: 1.6,
-      pose: (t) => {
-        const p = ZERO_POSE();
-        const env = envelope(t, 1.6, 0.2, 0.4);
+/**
+ * Quick reaction to a click (FR-EX-05). `side` is the side of the body that was touched, as the character's
+ * side (+1 = her right = the viewer's left); yaw +Y turns the head to her left, so "toward" is -side.
+ */
+export function touchGesture(part: TouchPart, side: 1 | -1 = 1): Gesture {
+  const g = (duration: number, attack: number, release: number, set: (p: Pose, env: number, t: number) => void): Gesture => ({
+    duration,
+    pose: (t) => {
+      const p = ZERO_POSE();
+      set(p, envelope(t, duration, attack, release), t);
+      return p;
+    },
+  });
+  switch (part) {
+    case 'head': // a pat: duck a little and wiggle
+      return g(1.6, 0.2, 0.4, (p, env, t) => {
         p.head[0] = 8 * D * env;
         p.head[2] = 3 * D * Math.sin(t * 6) * env;
-        return p;
-      },
-    };
+      });
+    case 'cheek': // flinch and turn the face away from the finger, a little shy
+      return g(1.5, 0.12, 0.45, (p, env) => {
+        p.head[1] = 10 * D * side * env;
+        p.head[2] = -6 * D * side * env;
+        p.head[0] = 3 * D * env;
+      });
+    case 'hand': // look down at the hand
+      return g(1.6, 0.2, 0.4, (p, env) => {
+        p.head[0] = 9 * D * env;
+        p.head[1] = -10 * D * side * env;
+        p.neck[0] = 3 * D * env;
+      });
+    case 'shoulder': // turn toward the tap
+      return g(1.3, 0.15, 0.5, (p, env) => {
+        p.head[1] = -18 * D * side * env;
+        p.neck[1] = -6 * D * side * env;
+        p.upper[1] = -3 * D * side * env;
+      });
+    case 'legs': // pull back, look down and away
+      return g(1.8, 0.12, 0.45, (p, env) => {
+        p.upper[0] = -4 * D * env;
+        p.head[0] = 10 * D * env;
+        p.head[1] = 12 * D * side * env;
+      });
+    default:
+      return emotionGesture('surprised', 0.5)!;
   }
-  return emotionGesture('surprised', 0.5)!;
+}
+
+/** Being stroked on the head: lean into the hand, eyes closed, a slow happy sway. */
+export function patPose(t: number): Pose {
+  const p = ZERO_POSE();
+  p.head[0] = 7 * D;
+  p.neck[0] = 2 * D;
+  p.head[2] = 5 * D * Math.sin(t * 2.2);
+  p.upper[2] = 1.2 * D * Math.sin(t * 2.2 - 0.6);
+  return p;
 }
 
 /** Continuous per-state posture, blended in/out by the controller (spec 3.5 仕草). */

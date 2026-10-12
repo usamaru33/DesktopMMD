@@ -8,6 +8,8 @@ import type {
   CharacterPreset,
   CharacterState,
   CharacterVoice,
+  TouchKind,
+  TouchPart,
   MemoryKind,
   MemoryRecord,
   MemoryStatus,
@@ -57,7 +59,7 @@ export interface C2MPayloads {
   [C2M.micFrame]: ArrayBuffer;
   [C2M.cancel]: void;
   [C2M.approvalAnswer]: { id: string; answer: ApprovalAnswer };
-  [C2M.touch]: 'head' | 'body';
+  [C2M.touch]: { part: TouchPart; kind: TouchKind };
   [C2M.ignoreMouse]: boolean;
   [C2M.drag]: { dx: number; dy: number };
   [C2M.dragEnd]: void;
@@ -96,7 +98,17 @@ export const M2C = {
   sleepy: 'character:sleepy',
   /** the character window was shown / hidden (or minimized): the renderer stops drawing while hidden */
   visible: 'window:visible',
+  /** a line said in reaction to being touched (audio, if any, follows as speechAudio with preview: true) */
+  touchLine: 'character:touch-line',
 } as const;
+
+export interface TouchLinePayload {
+  text: string;
+  emotion: Emotion;
+  intensity: number;
+  /** true if no audio will follow (muted / TTS failed) */
+  silent: boolean;
+}
 
 export interface SentencePayload {
   turnId: number;
@@ -166,6 +178,7 @@ export interface M2CPayloads {
   /** 0..1 drowsiness from user inactivity (spec 4.3 放置反応) */
   [M2C.sleepy]: number;
   [M2C.visible]: boolean;
+  [M2C.touchLine]: TouchLinePayload;
 }
 
 // ---------------- admin window: invoke (request/response) ----------------

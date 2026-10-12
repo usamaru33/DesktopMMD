@@ -13,6 +13,15 @@ export const EMOTION_MORPHS: Record<Exclude<Emotion, 'neutral'>, Partial<Record<
   thinking: { brow: ['真面目', '困る'], mouth: ['ん', '口すぼめ', '∧'] },
 };
 
+/**
+ * Emotion intensity (0..1) → how strongly the face shows it. Concave so that the mild intensities
+ * the LLM usually picks (0.4〜0.5) still read clearly (0.4 → 0.64), while 0 stays 0 and 1 stays 1.
+ */
+export function faceLevel(intensity: number): number {
+  const k = Math.min(1, Math.max(0, intensity));
+  return 1 - (1 - k) * (1 - k);
+}
+
 /** Weight of each part relative to the emotion intensity. */
 export const PART_WEIGHT: Record<FacePart, number> = { eye: 0.9, brow: 0.8, mouth: 0.6, cheek: 1.0 };
 

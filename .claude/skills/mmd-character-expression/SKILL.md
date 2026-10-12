@@ -42,7 +42,7 @@ import { MMDAnimationHelper } from 'three/examples/jsm/animation/MMDAnimationHel
 最終モーフ重み = clamp(
    idle層(まばたき)               ← まばたき中は感情の目モーフを抑制
  + 状態層(Thinking: 視線上・真面目眉)
- + 感情層(emotion × intensity × fade)
+ + 感情層(faceLevel(intensity × fade) × 部位の重み)  ← faceLevel=1-(1-k)²。0.4〜0.5でも見えるように
  + 口パク層(あいうえお)            ← 発話中は感情の口モーフを ×0.5
 )
 ボーン回転 = 基本ポーズ ⊕ 呼吸/揺れ ⊕ 状態の仕草 ⊕ 自前動作 ⊕ 視線(首/頭/目)
@@ -85,7 +85,8 @@ const EMOTION_MORPHS = {
 | angry | 首を後ろへ引く -6°、頭を少し傾ける |
 | troubled / thinking | 頭を左右どちらかへ 10° かしげる（thinking は視線も上へ） |
 | shy | 頭を横へ 15° 向け、視線をそらす |
-| 撫でられる | 目を閉じ（笑い）、頭を少し下げる |
+| 撫でられる | 目を閉じ（笑い）、頭を少し下げて左右にゆっくり揺れる（`patPose`） |
+| ほっぺ/手/肩/脚を触られる | ほっぺ=顔をそむけて照れ、手=手元を見て触られた側の手で振り返す、肩=触られた側へ振り向く、脚=身を引いて下を向き照れ（`touchGesture(part, side)`） |
 | つつかれる | surprised を弱め(0.5)で |
 
 状態の仕草: Listening=頭を少し傾け、2秒ごとに小さく頷く／Thinking=視線を上、首を傾ける／Acting=視線を下（手元）／Awaiting=頭を傾け、視線をユーザーへ／Sleeping=目を閉じ、頭を前へ。
@@ -136,8 +137,8 @@ for 各アクセント句:
 - 常に表示: Win+D（デスクトップの表示）や最小化で隠れたら、隠すべき状況（ユーザーが非表示にした／全画面アプリ）でない限り `CharacterWindow.reassert()` が復帰させる（minimize イベント＋3秒ごとの見張り）。
 - ウィンドウが隠れている（hide / minimize）間は `M2C.visible` を受けて requestAnimationFrame 自体を止める（`setVisible`）。backgroundThrottling を切っているので、止めないと隠れていても描画し続ける。
 - 描画は設定の fps 上限（requestAnimationFrame で経過時間を見て間引く）。Sleeping 中は設定値と 15fps の小さい方（`frameRateFor`）。5fps まで落とすと、1フレームの時間の打ち切り（0.1秒）でスローモーションになり、MMD物理（1回の更新で最大 3×1/65 秒）が骨格に追いつかず揺れ物が暴れる。物理は `physicsSteps` で ≤3/65 秒ずつに分けて進める。
-- 頭・体の判定: クリック位置のピッキングで当たった頂点に一番近いボーン名を見る代わりに、画面上の頭ボーン位置からの距離で「頭」か「体」かを決める（簡単で十分）。
+- 触った部位の判定: ピッキングで当たった頂点を調べる代わりに、ボーンの画面位置から決める（`touchZones.ts` の `classifyTouch`: 頭・ほっぺ・手・肩・体・脚）。撫では頭の上のカーソルの往復（`PatDetector`、クリック不要）。セリフは main の `TouchReactor`（DEVELOPMENT.md「触ったときの反応」）。
 
 ## 9. 親密度による変化（仕様書4.6）
 
-レンダラ側で変えるのは「振れ幅」と「専用モーション」だけ。段階1は目をそらす頻度を上げ、段階3以上は happy の intensity を ×1.2（最大1.0）。口調はプロンプト側（PromptBuilder の関係性ブロック）。
+レンダラ側で変えるのは「振れ幅」と「専用モーション」だけ。段階1は目をそらす頻度を上げ、段階3以上は happy の intensity を ×1.2（最大1.0）。口調はプロンプト側（PromptBuilder / skillPrompt の関係性ブロック）。関係性ブロックには「感情タグは段階で弱めない」と明記している（初対面の「控えめ」が感情の強さにまで効いて表情が乏しくなったため）。

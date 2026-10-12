@@ -225,7 +225,7 @@ export class OllamaClient implements LlmAdapter {
     } as unknown as BetaMessage;
   }
 
-  private async once(model: string, system: string, user: string, maxTokens: number, format: unknown, signal?: AbortSignal): Promise<string> {
+  private async once(model: string, system: string, user: string, maxTokens: number, format: unknown, signal?: AbortSignal, temperature?: number): Promise<string> {
     const res = await this.post(
       '/api/chat',
       {
@@ -235,7 +235,7 @@ export class OllamaClient implements LlmAdapter {
         think: false,
         keep_alive: KEEP_ALIVE,
         ...(format ? { format } : {}),
-        options: { num_ctx: LOCAL_NUM_CTX, num_predict: maxTokens, temperature: format ? 0 : 0.3 },
+        options: { num_ctx: LOCAL_NUM_CTX, num_predict: maxTokens, temperature: temperature ?? (format ? 0 : 0.3) },
       },
       signal ?? new AbortController().signal,
     );
@@ -244,7 +244,7 @@ export class OllamaClient implements LlmAdapter {
   }
 
   async json<T>(p: JsonParams): Promise<T> {
-    const text = await this.once(p.model, p.system, p.user, p.maxTokens, p.schema, p.signal);
+    const text = await this.once(p.model, p.system, p.user, p.maxTokens, p.schema, p.signal, p.temperature);
     try {
       return JSON.parse(text) as T;
     } catch {

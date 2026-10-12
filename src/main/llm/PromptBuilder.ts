@@ -78,7 +78,7 @@ export function relationshipBlock(c: CharacterPreset, stage: number): string {
   const examples = c.speechExamples[stage] ?? [];
   return `# ユーザーとの関係
 今の関係は「${s.name}」。${s.tone}
-口調の正本は上の性格設定。関係の段階は話し方の度合いだけを調整する。${examples.length ? `\nこの段階の話し方の例:\n${examples.map((e) => `- ${e}`).join('\n')}` : ''}`;
+口調の正本は上の性格設定。関係の段階は話し方の度合いだけを調整する。感情タグ（感情の種類と強さ）は段階で弱めず、気持ちのとおりに付ける。${examples.length ? `\nこの段階の話し方の例:\n${examples.map((e) => `- ${e}`).join('\n')}` : ''}`;
 }
 
 export function profileBlock(profile: SessionPromptInput['profile']): string {

@@ -55,7 +55,7 @@ export function skillRelationshipBlock(skill: SkillFile, stage: number): string 
   const name = STAGE_NAMES[idx];
   const sub = section(skill, '関係性')?.subsections.find((s) => s.title.startsWith(name));
   return `# ユーザーとの関係
-今の関係は「${name}」。関係の段階は話し方の度合いだけを調整し、キャラクターの性格は変えない。${sub?.body.trim() ? `\nこの段階での口調・距離感:\n${clean(sub.body)}` : ''}`;
+今の関係は「${name}」。関係の段階は話し方の度合いだけを調整し、キャラクターの性格は変えない。感情タグ（感情の種類と強さ）は段階で弱めず、気持ちのとおりに付ける。${sub?.body.trim() ? `\nこの段階での口調・距離感:\n${clean(sub.body)}` : ''}`;
 }
 
 export function overlaysOf(skill: SkillFile): string[] {

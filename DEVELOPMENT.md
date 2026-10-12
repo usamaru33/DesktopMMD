@@ -185,6 +185,15 @@ python scripts/make-icon.py  # アイコン（build/icon.ico）を作り直す�
 - 腕のVMDが動いている間は手を出さない（`armsAnimated()`）。PMXは読むだけで、ボーンの回転をメモリ上で足すだけ。
 - 形を直すときは `tests/unit/armRig.test.ts`（狙った方向を向く・手が体の前にある）を通したうえで、指のあるモデルと袖の大きいモデルの両方で目視する。
 
+## 触ったときの反応（FR-EX-05）
+
+- 部位の判定は `renderer/character/character/touchZones.ts`（純粋関数）。ボーンの画面位置（両目の中点・首・手首からひじの逆向きに0.45延ばした手の中心・左右の腕・下半身）と、目〜首の距離を単位に、手 → 顔（目より上なら頭、下ならほっぺ）→ 顔より上は頭 → 肩 → 下半身より下は脚 → 体、の順で決める。
+- 撫でる: `PatDetector` が頭の上のカーソルの左右の切り返し（12px以上の往復が1.6秒に3回）を数える。止まって0.9秒で終わり。撫でている間は `patPose` と happy の表情を保つ。
+- レンダラはその場で仕草と表情を出し（`touchGesture`、手は触った側の手で振り返す）、`character:touch {part, kind}` を main へ送る。
+- main（`main/character/touchLines.ts`）の `TouchReactor` がセリフを選ぶ: 部位×親密度（0〜1段階は polite、2以上は close）、直前の2つを避ける、どのセリフも3秒あける、撫でのセリフ同士は9秒あける、8秒に4回つついたら「many」。会話のターンにはせず（履歴にも残らない）、`speech.preview` で合成して `character:touch-line` と `speech:audio`（preview）で送る。待機中だけ話す。
+- キャラ専用のセリフ: `TouchLineLibrary` が人格ブロック（skill.md があればそれ）＋関係性ブロック（段階0と2）を utility モデルに渡して一度だけ作り、人格のハッシュをキーに `<データフォルダ>\cache\touch-lines.json` に保存する（skill.md を変えると作り直す）。使い道は「触ったときのセリフ作り」として記録される。品質チェック（感情が neutral ばかり・同じ言い回しの使い回し・脚や連打で happy）に通らなければ標準のセリフを使う。ローカルAIのみのとき（APIキーなし）は作らない: qwen3 8b/14b では場面を書き分けられず、不適切な組み合わせも出たため。
+- 設定 `render.touchVoice`（既定ON）。OFFでも仕草と表情の反応はする。
+
 ## モーション同士のつなぎ（補間）
 
 - 切り替わる動きは `motion.ts` の `CrossFader` でつなぐ。古い動きを動かしたまま、速度・加速度が両端で0になる曲線（`smootherstep`）で新しい動きへ移る。途中でさらに切り替わったときは、途中のフェードそのものを「元」として動かし続けるので、一瞬止まったり跳んだりしない。

@@ -3,7 +3,7 @@ import { EMOTION_VALENCE, type Emotion } from '@shared/emotions';
 import type { Relationship } from '@shared/types';
 
 export const STAGES = [
-  { min: 0, name: '初対面', tone: '丁寧語中心で控えめに話す。踏み込んだ話題は避ける。' },
+  { min: 0, name: '初対面', tone: '丁寧語中心で話す。踏み込んだ話題は避ける。' },
   { min: 20, name: '顔なじみ', tone: '丁寧語を基本に、ときどきくだけた口調を混ぜる。挨拶に一言添える。' },
   { min: 40, name: '親しい', tone: 'くだけた口調が中心。自分から話題を振ってよい。喜びは大きめに表す。' },
   { min: 70, name: '相棒', tone: 'くだけた口調で、これまでの出来事や内輪ネタにも触れる。記念日を大事にする。' },

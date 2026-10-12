@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findMorph, resolveFace } from '../../src/renderer/character/character/morphs';
+import { faceLevel, findMorph, resolveFace } from '../../src/renderer/character/character/morphs';
 
 const dict: Record<string, number> = { まばたき: 0, 笑い: 1, あ: 2, い: 3, う: 4, え: 5, お: 6, 困る: 7, 'にこり ': 8, ｷﾘｯ: 9, 照れ: 10, あ２: 11 };
 
@@ -23,5 +23,18 @@ describe('morph lookup', () => {
     expect(f.emotions.shy?.cheek).toBe(10);
     expect(f.missing).toContain('surprised.eye');
     expect(f.found).toContain('happy.eye');
+  });
+});
+
+describe('faceLevel', () => {
+  it('keeps the ends and lifts mild intensities', () => {
+    expect(faceLevel(0)).toBe(0);
+    expect(faceLevel(1)).toBe(1);
+    expect(faceLevel(0.4)).toBeCloseTo(0.64);
+    expect(faceLevel(-1)).toBe(0);
+    expect(faceLevel(2)).toBe(1);
+  });
+  it('is monotonic', () => {
+    for (let k = 0; k < 1; k += 0.05) expect(faceLevel(k + 0.05)).toBeGreaterThan(faceLevel(k));
   });
 });

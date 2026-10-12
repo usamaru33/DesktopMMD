@@ -18,6 +18,10 @@ export type VoiceInputMode = 'push' | 'wake' | 'off';
 export type Effort = 'low' | 'medium' | 'high';
 /** 動きの活発さ（呼吸・揺れの大きさ、手持ちぶさたの仕草の頻度、話しながらのうなずき） */
 export type Liveliness = 'calm' | 'normal' | 'lively';
+/** キャラクターのどこを触ったか（画面上のボーン位置から決める） */
+export type TouchPart = 'head' | 'cheek' | 'hand' | 'shoulder' | 'body' | 'legs';
+/** tap: クリック、pat: 頭の上でマウスを左右に動かす（なでる） */
+export type TouchKind = 'tap' | 'pat';
 export type LlmProvider = 'claude' | 'local';
 
 export interface AppEntry {
@@ -91,6 +95,8 @@ export interface Settings {
     defaultMotions: boolean;
     /** 動きの活発さ */
     liveliness: Liveliness;
+    /** 触ったり撫でたりしたときに、ひとこと話す（OFFでも表情と仕草の反応はする） */
+    touchVoice: boolean;
   };
   tools: {
     allowedDirs: string[];

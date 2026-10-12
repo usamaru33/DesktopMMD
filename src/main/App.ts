@@ -17,7 +17,7 @@ import {
 } from 'electron';
 import { C2M, type C2MPayloads, type DeepPartial, M2A, M2C, type VoiceFitProgressEvent, type VoiceFitRequest, type VoiceFitResult } from '@shared/ipc';
 import { DEFAULT_SETTINGS, GAZE_LIMIT_DEFAULT, GAZE_LIMIT_RANGE } from '@shared/defaults';
-import type { CharacterPreset, ServiceStatus, Settings } from '@shared/types';
+import type { CharacterPreset, ServiceStatus, Settings, TouchKind, TouchPart } from '@shared/types';
 import type { TtsPort, UiPort } from './adapters';
 import { FakeLlm } from './llm/FakeLlm';
 import { LlmClient, type LlmAdapter } from './llm/LlmClient';
@@ -49,7 +49,9 @@ import { Store, localHourKey, stripEmbedding } from './store/repos';
 import { CharacterStore, deepMerge, Secrets, SettingsStore } from './store/SettingsStore';
 import { ApprovalBroker } from './tools/ApprovalBroker';
 import { CharacterSkillService, draftSkillFromTemplate } from './character/CharacterSkillService';
-import { overlaysOf, skillName } from './character/skillPrompt';
+import { overlaysOf, skillName, skillPersonaBlock, skillRelationshipBlock } from './character/skillPrompt';
+import { TOUCH_LINES_SCHEMA, TOUCH_LINES_SYSTEM, TouchLineLibrary, TouchReactor } from './character/touchLines';
+import { personaBlock, relationshipBlock } from './llm/PromptBuilder';
 import { MOTION_EMOTIONS, writeDefaultMotions } from './character/defaultMotions';
 import { CalendarService, formatEvent, validateCalendarUrl } from './calendar/CalendarService';
 import { createAssistantTools } from './tools/builtin/assistantTools';
@@ -112,6 +114,8 @@ export class App {
   private status: ServiceStatus = { llm: 'no_key', voicevox: 'down', sidecar: 'starting', mcp: [] };
   private morphReport: C2MPayloads[typeof C2M.morphReport] | null = null;
   private skills!: CharacterSkillService;
+  private readonly touchReactor = new TouchReactor();
+  private touchLines!: TouchLineLibrary;
   /** いま有効なキャラクターのモード（skill.md の overlays）。一時的な切り替えなので保存しない */
   private mode: string | null = null;
   private skillWatcher: fs.FSWatcher | null = null;
@@ -153,6 +157,26 @@ export class App {
     this.characters.ensureDefault();
     this.character = this.loadCharacter(this.s.activeCharacter);
     this.skills = new CharacterSkillService((id) => this.characters.folder(id));
+    const touchCache = path.join(this.paths.root, 'cache', 'touch-lines.json');
+    this.touchLines = new TouchLineLibrary({
+      load: () => {
+        try {
+          return JSON.parse(fs.readFileSync(touchCache, 'utf8'));
+        } catch {
+          return undefined;
+        }
+      },
+      save: (c) => {
+        fs.mkdirSync(path.dirname(touchCache), { recursive: true });
+        fs.writeFileSync(touchCache, JSON.stringify(c, null, 1), 'utf8');
+      },
+      // only Claude writes these well: local models (tried qwen3 8b/14b) repeat one line across scenes, so they keep the defaults
+      generate: (persona) =>
+        this.fake || (this.s.llm.provider === 'local' && !this.secrets.getApiKey())
+          ? null
+          : this.llm().json({ model: this.s.llm.utilityModel, system: TOUCH_LINES_SYSTEM, user: `キャラクターの設定:\n${persona}`, schema: TOUCH_LINES_SCHEMA, maxTokens: 4000, purpose: 'touch', temperature: 0.8 }),
+      log: getLogger('touch'),
+    });
     this.logSkillStatus();
     fs.mkdirSync(this.paths.backups, { recursive: true });
     void cleanupBackups(this.paths.backups, new Date());
@@ -519,6 +543,30 @@ export class App {
     const file = candidates.find((f) => fs.existsSync(f));
     if (file) void shell.openPath(file);
     else this.toast('使い方のファイルが見つかりません', 'warn');
+  }
+
+  // ---------------- touch reactions (FR-EX-05) ----------------
+
+  /** The renderer already animates the touch; here only a short line, without a conversation turn. */
+  private async onTouch(part: TouchPart, kind: TouchKind): Promise<void> {
+    log.debug(`touched ${part} (${kind})`);
+    if (!this.s.render.touchVoice || this.s.sleeping || this.orc.state !== 'idle') return;
+    const stage = stageOf(this.store.relationship.get().affinity);
+    const line = this.touchReactor.react(part, kind, stage, this.touchLines.get(this.touchPersona()), Date.now());
+    if (!line) return;
+    const audio = this.s.voice.muted ? null : await this.speech.preview(line.text, this.character.voice, line.emotion, line.intensity).catch(() => null);
+    if (this.orc.state !== 'idle') return; // the user started talking meanwhile
+    this.charWin.send(M2C.touchLine, { ...line, silent: !audio });
+    if (audio) this.charWin.send(M2C.speechAudio, { turnId: -2, sentenceId: -2, wav: audio.wav, query: audio.query, emotion: line.emotion, intensity: line.intensity, preview: true });
+  }
+
+  /** The character as the conversation sees it (persona + how it talks early on and when close), for writing touch lines. */
+  private touchPersona(): string {
+    const sk = this.skills.load(this.character.id).skill;
+    const call = this.s.user.callName;
+    return sk
+      ? [skillPersonaBlock(sk, call), skillRelationshipBlock(sk, 0), skillRelationshipBlock(sk, 2)].join('\n\n')
+      : [personaBlock(this.character, call), relationshipBlock(this.character, 0), relationshipBlock(this.character, 2)].join('\n\n');
   }
 
   // ---------------- character skill (skill.md) ----------------
@@ -948,11 +996,7 @@ export class App {
       }
     });
     on(C2M.approvalAnswer, ({ id, answer }) => this.broker.answer(id, answer));
-    on(C2M.touch, (part) => {
-      if (this.orc.state !== 'idle') return;
-      // FR-EX-05 (Could): a light reaction without calling the LLM; the renderer animates it
-      log.debug(`touched ${part}`);
-    });
+    on(C2M.touch, (t) => void this.onTouch(t.part, t.kind));
     on(C2M.ignoreMouse, (ignore) => this.charWin.onIgnoreMouse(!!ignore));
     on(C2M.drag, (d) => this.charWin.onDrag(d));
     on(C2M.dragEnd, () => this.charWin.onDragEnd());

@@ -37,6 +37,7 @@ const PURPOSE_LABEL: Record<string, string> = {
   conflict: '記憶の矛盾判定',
   summary: '会話の要約',
   journal: 'ふりかえり日記',
+  touch: '触ったときのセリフ作り',
   other: 'その他（内訳の記録前）',
 };
 const MODEL_LABEL: Record<string, string> = {
@@ -605,6 +606,9 @@ export function SettingsPage(p: { navigate(page: AdminPage): void }) {
           </Field>
           <Field label="Windows起動時に自動起動" hint="サインインすると自動で立ち上がります（インストール版のみ）">
             <Toggle checked={s.autoLaunch} onChange={(v) => set({ autoLaunch: v })} />
+          </Field>
+          <Field label="触ったときにひとこと話す" hint="頭・ほっぺ・手などをクリックしたり、頭の上でマウスを左右に動かして撫でたりすると、場所に合わせて反応して話します。OFFでも表情と仕草の反応はします">
+            <Toggle checked={s.render.touchVoice} onChange={(v) => set({ render: { touchVoice: v } })} />
           </Field>
           <Field label="おやすみモード" hint="ONの間はリマインダー以外の声かけをせず、マイクも止めます"><Toggle checked={s.sleeping} onChange={(v) => set({ sleeping: v })} /></Field>
           <Field label="動きの活発さ" hint="活発: 呼吸や揺れが大きくなり、きょろきょろしたり首をかしげたりする仕草が増え、話しながらうなずきます。おとなしい: 小さな呼吸と揺れだけ">
