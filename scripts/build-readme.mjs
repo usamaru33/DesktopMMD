@@ -6,8 +6,19 @@ const md = fs.readFileSync('README.md', 'utf8')
   // the developer guide isn't shipped; drop the pointer to it
   .replace(/^> 開発者向けの情報は.*$/m, '');
 // the installer's README.html is a single file: inline the images it points to
-const body = (marked.parse(md, { gfm: true })).replace(/<img src="(docs\/images\/[^"]+\.(jpg|png))"/g, (_, src, ext) =>
+let body = (marked.parse(md, { gfm: true })).replace(/<img src="(docs\/images\/[^"]+\.(jpg|png))"/g, (_, src, ext) =>
   `<img src="data:image/${ext === 'jpg' ? 'jpeg' : 'png'};base64,${fs.readFileSync(src).toString('base64')}"`);
+// headings get the same ids GitHub gives them, so the README's in-page links work in the HTML too
+const slug = (t) => t.replace(/<[^>]+>/g, '').trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+const ids = new Set();
+body = body.replace(/<h([1-6])>(.*?)<\/h\1>/g, (_, n, inner) => {
+  const id = slug(inner);
+  ids.add(id);
+  return `<h${n} id="${id}">${inner}</h${n}>`;
+});
+const broken = [...body.matchAll(/href="#([^"]+)"/g)].map((m) => decodeURIComponent(m[1])).filter((id) => !ids.has(id));
+if (broken.length) throw new Error(`README.md: links to missing headings: ${broken.join(', ')}`);
+
 const html = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DesktopMMD の使い方</title>

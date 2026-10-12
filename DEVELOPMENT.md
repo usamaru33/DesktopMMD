@@ -95,6 +95,8 @@ python scripts/make-icon.py  # アイコン（build/icon.ico）を作り直す�
 
 インストーラーにMMDモデルは含まれません。
 
+`npm run dist` は最初に `scripts/build-readme.mjs` で README.md を `build/README.html`（インストーラーに同梱する1ファイルの説明書）に変換する。`docs/images/` の画像は埋め込み、見出しには GitHub と同じ規則の id を付ける。README 内のリンク（`#見出し`）の行き先が無いとエラーで止まるので、見出しの名前を変えたらリンクも直す。
+
 ## 自動更新
 
 - 起動の約8秒後に `src/main/update/UpdateService.ts` が `https://api.github.com/repos/usamaru33/DesktopMMD/releases/latest` を確認する（Electron非依存。通信・保存先・インストーラー起動は注入）。
