@@ -30,7 +30,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "dompurify": "^3.4.16",
+    "dompurify": "^3.4.17",
     "get-windows": "^9.3.0",
     "ical.js": "^2.2.1",
     "mammoth": "^1.13.0",
